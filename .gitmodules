@@ -1,0 +1,3 @@
+[submodule "lib/python-gnupg"]
+	path = lib/python-gnupg
+	url = git@github.com:micahflee/python-gnupg.git
