@@ -6,11 +6,45 @@ cwd = sys.path[0]
 sys.path.append(cwd+'/lib/python-gnupg')
 import gnupg
 
+class TrollWoT_DownloadWoT:
+    def __init__(self, gpg, keyserver = 'subkeys.pgp.net'):
+        self.gpg = gpg
+        self.keyserver = keyserver
+
+        self.imported_key_fingerprints = []
+
+        keys = gpg.list_keys()
+        for key in keys:
+            self.imported_key_fingerprints.append(key['fingerprint'])
+
+    def download(self, fingerprints):
+        sig_fingerprints = []
+
+        for fp in fingerprints:
+            if fp not in self.imported_key_fingerprints:
+                print 'downloading key {0}'.format(fp)
+                res = self.gpg.recv_keys(self.keyserver, fp)
+                self.imported_key_fingerprints += res.fingerprints 
+
+                sigs = gpg.list_sig_fingerprints(fp)
+                sig_fingerprints += sigs
+
+        sig_fingerprints_to_import = []
+        for fp in sig_fingerprints:
+            if fp not in self.imported_key_fingerprints:
+                sig_fingerprints_to_import.append(fp)
+
+        if len(sig_fingerprints_to_import) > 0:
+            print 'downloading {0} more fingerprints'.format(len(sig_fingerprints_to_import))
+            self.download(sig_fingerprints_to_import)
+
+        
 if __name__ == '__main__':
-    print 'Download the strong set, starting with 99999697'
-    gpg = gnupg.GPG(gnupghome=cwd+'/homedir')
+    print 'Download the strong set, starting with 5C17616361BD9F92422AC08BB4D25A1E99999697'
+    gpg = gnupg.GPG(gnupghome=cwd+'/homedir', verbose=False)
 
-    # import micahflee.asc
-    gpg.import_keys(open(cwd+'/micahflee.asc', 'r').read())
+    download_wot = TrollWoT_DownloadWoT(gpg)
+    download_wot.download(['5C17616361BD9F92422AC08BB4D25A1E99999697'])
 
+    print '{0} keys imported'.format(len(download_wot.imported_key_fingerprints))
 
