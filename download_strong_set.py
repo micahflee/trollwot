@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-import sys
+import sys, time
 cwd = sys.path[0]
 
 sys.path.append(cwd+'/lib/python-gnupg')
@@ -51,11 +51,15 @@ class TrollWoT_DownloadWoT:
 
         
 if __name__ == '__main__':
+    start_time = time.time()
+
     print 'Download the strong set, starting with 5C17616361BD9F92422AC08BB4D25A1E99999697'
     gpg = gnupg.GPG(gnupghome=cwd+'/homedir', verbose=False)
 
     download_wot = TrollWoT_DownloadWoT(gpg)
     download_wot.download(['5C17616361BD9F92422AC08BB4D25A1E99999697'])
 
-    print '{0} keys imported'.format(len(download_wot.imported_long_key_ids))
+    end_time = time.time()
+    time_diff = int(end_time - start_time)
+    print '{0} keys imported, took {1} seconds'.format(len(download_wot.imported_long_key_ids), time_diff)
 
