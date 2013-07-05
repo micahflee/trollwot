@@ -11,32 +11,43 @@ class TrollWoT_DownloadWoT:
         self.gpg = gpg
         self.keyserver = keyserver
 
-        self.imported_key_fingerprints = []
+        self.imported_long_key_ids = []
 
         keys = gpg.list_keys()
+        fingerprints = []
         for key in keys:
-            self.imported_key_fingerprints.append(key['fingerprint'])
-
+            fingerprints.append(key['fingerprint'])
+        self.add_key_ids(fingerprints)
+        print 'already have {0} keys in keyring'.format(len(self.imported_long_key_ids))
+        
     def download(self, fingerprints):
         sig_fingerprints = []
 
         for fp in fingerprints:
-            if fp not in self.imported_key_fingerprints:
+            if fp not in self.imported_long_key_ids:
                 print 'downloading key {0}'.format(fp)
                 res = self.gpg.recv_keys(self.keyserver, fp)
-                self.imported_key_fingerprints += res.fingerprints 
+                self.add_key_ids(res.fingerprints)
+            else:
+                print 'already have {0}'.format(fp)
 
-                sigs = gpg.list_sig_fingerprints(fp)
-                sig_fingerprints += sigs
+            sigs = gpg.list_sig_fingerprints(fp)
+            sig_fingerprints += sigs
 
         sig_fingerprints_to_import = []
         for fp in sig_fingerprints:
-            if fp not in self.imported_key_fingerprints:
+            if fp not in self.imported_long_key_ids:
                 sig_fingerprints_to_import.append(fp)
 
         if len(sig_fingerprints_to_import) > 0:
             print 'downloading {0} more fingerprints'.format(len(sig_fingerprints_to_import))
             self.download(sig_fingerprints_to_import)
+
+    def add_key_ids(self, fingerprints):
+        for fp in fingerprints:
+            long_key_id = fp[-16:]
+            if long_key_id not in self.imported_long_key_ids:
+                self.imported_long_key_ids.append(long_key_id)
 
         
 if __name__ == '__main__':
@@ -46,5 +57,5 @@ if __name__ == '__main__':
     download_wot = TrollWoT_DownloadWoT(gpg)
     download_wot.download(['5C17616361BD9F92422AC08BB4D25A1E99999697'])
 
-    print '{0} keys imported'.format(len(download_wot.imported_key_fingerprints))
+    print '{0} keys imported'.format(len(download_wot.imported_long_key_ids))
 
