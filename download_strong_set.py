@@ -23,16 +23,19 @@ class TrollWoT_DownloadWoT:
     def download(self, fingerprints):
         sig_fingerprints = []
 
+        i = 0
         for fp in fingerprints:
             if fp not in self.imported_long_key_ids:
-                print 'downloading key {0}'.format(fp)
+                print '{0}: downloading key {1}'.format(i, fp)
                 res = self.gpg.recv_keys(self.keyserver, fp)
                 self.add_key_ids(res.fingerprints)
             else:
-                print 'already have {0}'.format(fp)
+                print '{0}:already have {1}'.format(i, fp)
 
             sigs = gpg.list_sig_fingerprints(fp)
             sig_fingerprints += sigs
+
+            i += 1
 
         sig_fingerprints_to_import = []
         for fp in sig_fingerprints:
