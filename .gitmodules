@@ -1,3 +1,6 @@
 [submodule "lib/python-gnupg"]
 	path = lib/python-gnupg
 	url = https://github.com/micahflee/python-gnupg.git
+[submodule "lib/gnupg"]
+	path = lib/gnupg
+	url = https://github.com/micahflee/trollwot_gnupg.git
