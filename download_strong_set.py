@@ -30,7 +30,7 @@ class TrollWoT_DownloadWoT:
                 res = self.gpg.recv_keys(self.keyserver, fp)
                 self.add_key_ids(res.fingerprints)
             else:
-                print '{0}:already have {1}'.format(i, fp)
+                print '{0}: already have {1}'.format(i, fp)
 
             sigs = gpg.list_sig_fingerprints(fp)
             sig_fingerprints += sigs
