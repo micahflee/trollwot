@@ -20,6 +20,14 @@ Build the modified gnupg.
     ./configure
     make
 
-To start downloading the web of trust:
+Download the web of trust
+-------------------------
+
+I wrote a script to recursively download the web of trust, one key at a time. However it's horrible ineffecient and will take forever to finish running. To start downloading the web of trust:
 
     ./download_strong_set.py
+
+A better way to get public keys is to download a recent static dump of all the keys in the public key servers from one of these places:
+
+* ftp://ftp.prato.linux.it/pub/keyring/dump-latest/
+* http://keyserver.borgnet.us/dump/
