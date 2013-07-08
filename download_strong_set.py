@@ -57,7 +57,7 @@ if __name__ == '__main__':
     start_time = time.time()
 
     print 'Download the strong set, starting with 5C17616361BD9F92422AC08BB4D25A1E99999697'
-    gpg = gnupg.GPG(gnupghome=cwd+'/homedir', verbose=False)
+    gpg = gnupg.GPG(gnupghome=cwd+'/homedir_download_strong_set', verbose=False)
 
     download_wot = TrollWoT_DownloadWoT(gpg)
     download_wot.download(['5C17616361BD9F92422AC08BB4D25A1E99999697'])
