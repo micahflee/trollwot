@@ -27,6 +27,11 @@ The script that brute forces key IDs uses a modified version of gnupg that remov
 
     nice -20 ./brute_force_keyid.py
 
+### To do list
+
+* Make keyid and number of threads command line arguements
+* Make ctrl-c actually quit so you don't have to kill the process
+
 Download the web of trust
 -------------------------
 
