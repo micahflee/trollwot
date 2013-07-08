@@ -55,7 +55,7 @@ class BruteForceKeyID(threading.Thread):
 
 if __name__ == '__main__':
     # todo: make the keyid and number of threads cli args
-    keyid = '99999697'
+    keyid = '99999999'
 
     gpg = gnupg.GPG(gnupghome=cwd+'/homedir_brute_force_keyid', gpgbinary=cwd+'/lib/gnupg/g10/gpg', verbose=False)
     common = BruteForceKeyID_Common(gpg, keyid=keyid, name_real='Test Key', name_email='testkey@micahflee.com')
@@ -63,6 +63,6 @@ if __name__ == '__main__':
     sys.stdout.write('Brute forcing key id {0}\n'.format(keyid))
 
     # start 4 threads
-    for i in xrange(10):
+    for i in xrange(4):
         BruteForceKeyID(common).start()
 

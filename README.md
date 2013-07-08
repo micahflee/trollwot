@@ -20,6 +20,13 @@ Build the modified gnupg.
     ./configure
     make
 
+Brute force PGP key ID
+----------------------
+
+The script that brute forces key IDs uses a modified version of gnupg that removes all the entropy from key generation, which makes it very quick and very insecure. To run it on your computer, making it a very high priority process:
+
+    nice -20 ./brute_force_keyid.py
+
 Download the web of trust
 -------------------------
 
