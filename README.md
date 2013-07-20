@@ -20,26 +20,11 @@ Build the modified gnupg.
     ./configure
     make
 
-Brute force PGP key ID
-----------------------
+Brute force PGP key ID (inefficiently)
+--------------------------------------
 
 The script that brute forces key IDs uses a modified version of gnupg that removes all the entropy from key generation, which makes it very quick and very insecure. To run it on your computer, making it a very high priority process:
 
     nice -20 ./brute_force_keyid.py
 
-### To do list
-
-* Make keyid and number of threads command line arguements
-* Make ctrl-c actually quit so you don't have to kill the process
-
-Download the web of trust
--------------------------
-
-I wrote a script to recursively download the web of trust, one key at a time. However it's horrible ineffecient and will take forever to finish running. To start downloading the web of trust:
-
-    ./download_strong_set.py
-
-A better way to get public keys is to download a recent static dump of all the keys in the public key servers from one of these places:
-
-* ftp://ftp.prato.linux.it/pub/keyring/dump-latest/
-* http://keyserver.borgnet.us/dump/
+Although it actually turns out that this is an inefficient way to brute force key IDs.
