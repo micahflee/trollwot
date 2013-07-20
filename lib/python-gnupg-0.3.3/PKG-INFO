@@ -1,0 +1,26 @@
+Metadata-Version: 1.0
+Name: python-gnupg
+Version: 0.3.3
+Summary: A wrapper for the Gnu Privacy Guard (GPG or GnuPG)
+Home-page: http://packages.python.org/python-gnupg/index.html
+Author: Vinay Sajip
+Author-email: vinay_sajip@red-dove.com
+License: Copyright (C) 2008-2013 by Vinay Sajip. All Rights Reserved. See LICENSE for license.
+Download-URL: http://python-gnupg.googlecode.com/files/python-gnupg-0.3.3.tar.gz
+Description: This module allows easy access to GnuPG's key management, encryption and signature functionality from Python programs. It is intended for use with Python 2.4 or greater.
+Platform: No particular restrictions
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: BSD License
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 2
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 2.4
+Classifier: Programming Language :: Python :: 2.5
+Classifier: Programming Language :: Python :: 2.6
+Classifier: Programming Language :: Python :: 2.7
+Classifier: Programming Language :: Python :: 3.0
+Classifier: Programming Language :: Python :: 3.1
+Classifier: Programming Language :: Python :: 3.2
+Classifier: Operating System :: OS Independent
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
