@@ -1,5 +1,20 @@
 #!/usr/bin/env python
 
+"""
+I started writing this, and then quickly realized it would take a really long 
+to actually download the whole strong set this way. Then I began searching for
+how to sync from key servers, which lead me to regular static key server dumps:
+
+ftp://ftp.prato.linux.it/pub/keyring/ - Generated every Wednesday
+http://keys.niif.hu/keydump/ - Generated every Monday
+http://key-server.de/dump - Generated every Friday
+ftp://key-server.de/dump (anonymous) - Generated every Friday
+http://keyserver.borgnet.us/dump - Generated every Sunday
+
+Right now this script is in a semi-broken state, but I decided to leave it 
+here anyway.
+"""
+
 import sys, time
 cwd = sys.path[0]
 
@@ -32,7 +47,7 @@ class TrollWoT_DownloadWoT:
             else:
                 print '{0}: already have {1}'.format(i, fp)
 
-            sigs = gpg.list_sig_fingerprints(fp)
+            sigs = gpg.list_sigs(fp[-8:])
             sig_fingerprints += sigs
 
             i += 1
@@ -57,7 +72,7 @@ if __name__ == '__main__':
     start_time = time.time()
 
     print 'Download the strong set, starting with 5C17616361BD9F92422AC08BB4D25A1E99999697'
-    gpg = gnupg.GPG(gnupghome=cwd+'/homedir_download_strong_set', verbose=False)
+    gpg = gnupg.GPG(homedir=cwd+'/homedir_download_strong_set', verbose=False)
 
     download_wot = TrollWoT_DownloadWoT(gpg)
     download_wot.download(['5C17616361BD9F92422AC08BB4D25A1E99999697'])
