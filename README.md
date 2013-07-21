@@ -20,6 +20,17 @@ Build the modified gnupg.
     ./configure
     make
 
+ASCII sign a PGP key
+--------------------
+
+ascii_sign.py is a script that takes a filename and a target key id as input. It downloads the target key, then generates a new PGP for each line in the file. It signs the target key with the new keys and pushes everything to the pgp.mit.edu key server. Essentially, it lets you sign any key with ASCII art.
+
+For example, check out my key: http://pgp.mit.edu:11371/pks/lookup?op=vindex&search=0x5C17616361BD9F92422AC08BB4D25A1E99999697
+
+ASCII sign a key like this:
+
+    ./ascii_sign.py ascii_art.txt KEYID
+
 Brute force PGP key ID (inefficiently)
 --------------------------------------
 

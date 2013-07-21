@@ -16,7 +16,7 @@ class TrollWoT_ASCIISign:
     
         # download target key
         print 'Downloading key {0} from pgp.mit.edu'.format(keyid)
-        self.send_key(self.target_keyid)
+        self.recv_key(self.target_keyid)
         
         # generate new keys
         for userid in open(filename, 'r').read().strip().split('\n'):
@@ -43,6 +43,11 @@ class TrollWoT_ASCIISign:
         keyid = signing_fingerprint[-8:]
         print 'Signing key {0} with key {1}'.format(self.target_keyid, keyid)
         subprocess.Popen(['gpg', '--homedir', self.gpg.gnupghome, '--batch', '--yes', '--status-fd', '1', '--default-key', keyid, '--sign-key', self.target_keyid]).wait()
+
+    def recv_key(self, fingerprint):
+        keyid = fingerprint[-8:]
+        print 'Receiving key {0} from pgp.mit.edu'.format(keyid)
+        subprocess.Popen(['gpg', '--homedir', self.gpg.gnupghome, '--keyserver', 'pgp.mit.edu', '--recv-keys', keyid]).wait()
 
     def send_key(self, fingerprint):
         keyid = fingerprint[-8:]
