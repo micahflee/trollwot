@@ -29,7 +29,9 @@ For example, check out my key: http://pgp.mit.edu:11371/pks/lookup?op=vindex&sea
 
 ASCII sign a key like this:
 
-    ./ascii_sign.py ascii_art.txt KEYID
+    ./ascii_sign.py [ASCII_ART_FILENAME] [KEYID]
+
+If you're ASCII signing a key with multiple user IDs, you'll have to press "y" to verify you want to sign all user IDs for each line.
 
 Brute force PGP key ID (inefficiently)
 --------------------------------------

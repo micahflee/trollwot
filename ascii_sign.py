@@ -11,6 +11,7 @@ class TrollWoT_ASCIISign:
         self.target_keyid = keyid
         self.homedir = homedir
         self.keyserver_url = "http://pgp.mit.edu:11371/pks/lookup?op=vindex&search=0x{0}".format(keyid)
+        self.fingerprints = [self.target_keyid]
 
         self.gpg = gnupg.GPG(gnupghome=homedir, gpgbinary=cwd+'/lib/gnupg/g10/gpg', verbose=False)
     
@@ -19,14 +20,33 @@ class TrollWoT_ASCIISign:
         self.recv_key(self.target_keyid)
         
         # generate new keys
+        self.gen_keys_and_sign(filename)
+
+        # show fingerprints with gpg
+        subprocess.Popen(['gpg', '--homedir', self.gpg.gnupghome, '--list-sigs', self.target_keyid]).wait()
+
+        # prompt for uploading to key server
+        upload_keys = ''
+        while upload_keys != 'YES' and upload_keys != 'no':
+            upload_keys = raw_input('Does this look good? Type "YES" to upload, "no" to quit: ')
+
+        if upload_keys == 'YES':
+            print 'Uploading fingerprints'
+            for fingerprint in self.fingerprints:
+                self.send_key(fingerprint)
+
+            print '\n\nView the ASCII signed key here: {0}'.format(self.keyserver_url)
+
+    def gen_keys_and_sign(self, filename):
+        fingerprints_to_sign = []
+
         for userid in open(filename, 'r').read().strip().split('\n'):
             fingerprint = self.gen_key(userid)
-            self.send_key(fingerprint)
+            fingerprints_to_sign.append(fingerprint)
+            self.fingerprints.append(fingerprint)
+        
+        for fingerprint in fingerprints_to_sign:
             self.sign_key(fingerprint)
-        self.send_key(self.target_keyid)
-
-        # view key
-        print '\n\nView the ASCII signed key here: {0}'.format(self.keyserver_url)
 
     def gen_key(self, userid):
         print 'Generating key with userid: {0}'.format(userid)
@@ -42,7 +62,7 @@ class TrollWoT_ASCIISign:
     def sign_key(self, signing_fingerprint):
         keyid = signing_fingerprint[-8:]
         print 'Signing key {0} with key {1}'.format(self.target_keyid, keyid)
-        subprocess.Popen(['gpg', '--homedir', self.gpg.gnupghome, '--batch', '--yes', '--status-fd', '1', '--default-key', keyid, '--sign-key', self.target_keyid]).wait()
+        subprocess.Popen(['gpg', '--homedir', self.gpg.gnupghome, '--yes', '--default-key', keyid, '--sign-key', self.target_keyid]).wait()
 
     def recv_key(self, fingerprint):
         keyid = fingerprint[-8:]
