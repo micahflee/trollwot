@@ -42,11 +42,10 @@ For example, if you want Barack Obama to sign your key, it's easy:
 
     ./fake_sign.py "Barack Obama" "barack@whitehouse.gov" [KEYID]
 
-Brute force PGP key ID (inefficiently)
---------------------------------------
+Brute force PGP key ID (slow)
+-----------------------------
 
-The script that brute forces key IDs uses a modified version of gnupg that removes all the entropy from key generation, which makes it very quick and very insecure. To run it on your computer, making it a very high priority process:
+brute_force_keyid.py brute forces key IDs by generating an RSA key (using ssh-keygen) and uses the script keytrans to turn it into a PGP key, but changing the timestamp. To run it on your computer, making it a very high priority process:
 
-    nice -20 ./brute_force_keyid.py
+    nice -20 ./bruteforce_keyid.py 00EFFEFF "Trolling the Web of Trust"
 
-Although it actually turns out that this is an inefficient way to brute force key IDs.
