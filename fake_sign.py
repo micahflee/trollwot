@@ -1,0 +1,77 @@
+#!/usr/bin/env python
+
+import sys, subprocess, io
+cwd = sys.path[0]
+
+sys.path.append(cwd+'/lib/python-gnupg-0.3.3')
+import gnupg
+
+class TrollWoT_FakeSign:
+    def __init__(self, name, email, keyid, homedir):
+        self.gpg = gnupg.GPG(gnupghome=homedir, gpgbinary=cwd+'/lib/gnupg/g10/gpg', verbose=False)
+        fingerprints = [keyid]
+    
+        # download target key
+        print 'Downloading key {0} from pool.sks-keyservers.net'.format(keyid)
+        self.recv_key(keyid)
+        
+        # generate new key
+        fingerprint = self.gen_key(name, email)
+        fingerprints.append(fingerprint)
+
+        # sign target key
+        self.sign_key(fingerprint, keyid)
+
+        # show fingerprints with gpg
+        subprocess.Popen(['gpg', '--homedir', self.gpg.gnupghome, '--list-sigs', keyid]).wait()
+
+        # prompt for uploading to key server
+        upload_keys = ''
+        while upload_keys != 'YES' and upload_keys != 'no':
+            upload_keys = raw_input('Does this look good? Type "YES" to upload, "no" to quit: ')
+
+        if upload_keys == 'YES':
+            print 'Uploading fingerprints'
+            for fingerprint in fingerprints:
+                self.send_key(fingerprint)
+
+            print '\n\nView the signed key here: {0}'.format(self.keyserver_url)
+
+    def gen_key(self, name, email):
+        print 'Generating key with userid: {0} <{1}>'.format(name, email)
+        input = self.gpg.gen_key_input(name_real = name, name_email = email, key_length = 4096)
+        input_lines = input.split('\n')
+        input = ''
+        for line in input_lines:
+            if 'Name-Comment' not in line:
+                input += line+'\n'
+        key = self.gpg.gen_key(input)
+        return key.fingerprint
+
+    def sign_key(self, signing_fingerprint, target_fingerprint):
+        signing_keyid = signing_fingerprint[-8:]
+        target_keyid = target_fingerprint[-8:]
+        print 'Signing key {0} with key {1}'.format(target_keyid, signing_keyid)
+        subprocess.Popen(['gpg', '--homedir', self.gpg.gnupghome, '--yes', '--default-key', signing_keyid, '--sign-key', target_keyid]).wait()
+
+    def recv_key(self, fingerprint):
+        keyid = fingerprint[-8:]
+        print 'Receiving key {0} from pool.sks-keyservers.net'.format(keyid)
+        subprocess.Popen(['gpg', '--homedir', self.gpg.gnupghome, '--keyserver', 'pool.sks-keyservers.net', '--recv-keys', keyid]).wait()
+
+    def send_key(self, fingerprint):
+        keyid = fingerprint[-8:]
+        print 'Sending key {0} to pool.sks-keyservers.net'.format(keyid)
+        subprocess.Popen(['gpg', '--homedir', self.gpg.gnupghome, '--keyserver', 'pool.sks-keyservers.net', '--send-key', keyid]).wait()
+
+if __name__ == '__main__':
+    # arguments
+    if len(sys.argv) != 4:
+        print 'Usage: {0} [name] [email] [keyid]'.format(sys.argv[0])
+        sys.exit()
+    name = sys.argv[1]
+    email = sys.argv[2]
+    keyid = sys.argv[3]
+
+    TrollWoT_FakeSign(name, email, keyid, homedir=cwd+'/homedir_fake_sign')
+
