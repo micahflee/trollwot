@@ -33,6 +33,15 @@ ASCII sign a key like this:
 
 If you're ASCII signing a key with multiple user IDs, you'll have to press "y" to verify you want to sign all user IDs for each line.
 
+Add fake sigs to a PGP key
+--------------------------
+
+fake_sign.py is a script that takes a name, email address, and target key id as input. It creates a new key with that name and email, and uses it to sign the target key.
+
+For example, if you want Barack Obama to sign your key, it's easy:
+
+    ./fake_sign.py "Barack Obama" "barack@whitehouse.gov" [KEYID]
+
 Brute force PGP key ID (inefficiently)
 --------------------------------------
 
