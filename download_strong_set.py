@@ -22,7 +22,7 @@ sys.path.append(cwd+'/lib/python-gnupg')
 import gnupg
 
 class TrollWoT_DownloadWoT:
-    def __init__(self, gpg, keyserver = 'subkeys.pgp.net'):
+    def __init__(self, gpg, keyserver = 'pool.sks-keyservers.net'):
         self.gpg = gpg
         self.keyserver = keyserver
 

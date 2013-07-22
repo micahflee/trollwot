@@ -10,13 +10,13 @@ class TrollWoT_ASCIISign:
     def __init__(self, filename, target_keyid, homedir):
         self.target_keyid = keyid
         self.homedir = homedir
-        self.keyserver_url = "http://pgp.mit.edu:11371/pks/lookup?op=vindex&search=0x{0}".format(keyid)
+        self.keyserver_url = "http://pool.sks-keyservers.net:11371/pks/lookup?op=vindex&search=0x{0}".format(keyid)
         self.fingerprints = [self.target_keyid]
 
         self.gpg = gnupg.GPG(gnupghome=homedir, gpgbinary=cwd+'/lib/gnupg/g10/gpg', verbose=False)
     
         # download target key
-        print 'Downloading key {0} from pgp.mit.edu'.format(keyid)
+        print 'Downloading key {0} from pool.sks-keyservers.net'.format(keyid)
         self.recv_key(self.target_keyid)
         
         # generate new keys
@@ -66,13 +66,13 @@ class TrollWoT_ASCIISign:
 
     def recv_key(self, fingerprint):
         keyid = fingerprint[-8:]
-        print 'Receiving key {0} from pgp.mit.edu'.format(keyid)
-        subprocess.Popen(['gpg', '--homedir', self.gpg.gnupghome, '--keyserver', 'pgp.mit.edu', '--recv-keys', keyid]).wait()
+        print 'Receiving key {0} from pool.sks-keyservers.net'.format(keyid)
+        subprocess.Popen(['gpg', '--homedir', self.gpg.gnupghome, '--keyserver', 'pool.sks-keyservers.net', '--recv-keys', keyid]).wait()
 
     def send_key(self, fingerprint):
         keyid = fingerprint[-8:]
-        print 'Sending key {0} to pgp.mit.edu'.format(keyid)
-        subprocess.Popen(['gpg', '--homedir', self.gpg.gnupghome, '--keyserver', 'pgp.mit.edu', '--send-key', keyid]).wait()
+        print 'Sending key {0} to pool.sks-keyservers.net'.format(keyid)
+        subprocess.Popen(['gpg', '--homedir', self.gpg.gnupghome, '--keyserver', 'pool.sks-keyservers.net', '--send-key', keyid]).wait()
 
 if __name__ == '__main__':
     # arguments
