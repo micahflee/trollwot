@@ -1,0 +1,60 @@
+# -*-shell-script-*-
+# This should be sourced by bash (though we welcome changes to make it POSIX sh compliant)
+
+# Monkeysphere host import-key subcommand
+#
+# The monkeysphere scripts are written by:
+# Jameson Rollins <jrollins@finestructure.net>
+# Jamie McClelland <jm@mayfirst.org>
+# Daniel Kahn Gillmor <dkg@fifthhorseman.net>
+#
+# They are Copyright 2008-2010 and are all released under the GPL,
+# version 3 or later.
+
+import_key() {
+
+local keyFile="$1"
+local serviceName="$2"
+
+# check that key file specified
+if [ -z "$keyFile" ] ; then
+    failure "Must specify PEM-encoded key file to import, or specify '-' for stdin."
+fi
+
+# fail if hostname not specified
+if [ -z "$serviceName" ] ; then
+    failure "You must specify a service name for use in the OpenPGP certificate user ID."
+fi
+
+# test that a key with that user ID does not already exist
+prompt_userid_exists "$serviceName"
+
+# check that the service name is well formatted
+check_service_name "$serviceName"
+
+# create host home
+mkdir -p "${MHDATADIR}"
+mkdir -p "${GNUPGHOME_HOST}"
+chmod 700 "${GNUPGHOME_HOST}"
+
+# import pem-encoded key to an OpenPGP private key
+if [ "$keyFile" = '-' ] ; then
+    log verbose "importing key from stdin..."
+    PEM2OPENPGP_USAGE_FLAGS=authenticate pem2openpgp "$serviceName" \
+	| gpg_host --import
+else
+    log verbose "importing key from file '$keyFile'..."
+    PEM2OPENPGP_USAGE_FLAGS=authenticate pem2openpgp "$serviceName" \
+	<"$keyFile" \
+	| gpg_host --import
+fi
+
+# export to OpenPGP public key to file
+update_pgp_pub_file
+
+log info "host key imported:"
+
+# show info about new key
+show_key "$serviceName"
+
+}

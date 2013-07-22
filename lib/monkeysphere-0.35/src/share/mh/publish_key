@@ -1,0 +1,62 @@
+# -*-shell-script-*-
+# This should be sourced by bash (though we welcome changes to make it POSIX sh compliant)
+
+# Monkeysphere host publish-key subcommand
+#
+# The monkeysphere scripts are written by:
+# Jameson Rollins <jrollins@finestructure.net>
+# Jamie McClelland <jm@mayfirst.org>
+# Daniel Kahn Gillmor <dkg@fifthhorseman.net>
+#
+# They are Copyright 2008-2010, and are all released under the GPL,
+# version 3 or later.
+
+# publish keys to keyserver
+
+publish_key() {
+
+local keyID="$1"
+local GNUPGHOME
+
+if [ "$PROMPT" != "false" ] ; then
+    log debug "Because \$MONKEYSPHERE_PROMPT is set to $PROMPT, interactively confirm publishing key"
+    printf "Really publish key '$keyID' to $KEYSERVER? (Y/n) " >&2
+    read OK; OK=${OK:=Y}
+    if [ "${OK/y/Y}" != 'Y' ] ; then
+	log error "key not published."
+        return
+    fi
+else
+    log debug "publishing key '$keyID' without prompting."
+fi
+
+# create a temporary gnupg directory from which to publish the key
+export GNUPGHOME=$(msmktempdir)
+chmod 0700 "$GNUPGHOME"
+chown "$MONKEYSPHERE_USER":"$MONKEYSPHERE_GROUP" "$GNUPGHOME"
+
+# trap to remove tmp dir if break
+trap "rm -rf $GNUPGHOME" EXIT
+
+# import the key into the tmp dir
+su_monkeysphere_user \
+    "gpg --quiet --import" <"$HOST_KEY_FILE"
+
+KEYSERVER_OPTIONS=""
+for anchorfile in "${SYSCONFIGDIR}/monkeysphere-host-x509-anchors.crt" "${SYSCONFIGDIR}/monkeysphere-x509-anchors.crt"; do
+    if [ -z "$KEYSERVER_OPTIONS" ] && [ -r "$anchorfile"  ] ; then
+	log debug "using trust anchor file: $anchorfile"
+        KEYSERVER_OPTIONS="--keyserver-options 'ca-cert-file=$anchorfile'"
+    fi
+done
+
+# publish key
+log debug "publishing key with the following gpg command line and options:"
+su_monkeysphere_user \
+    "gpg --keyserver $KEYSERVER $KEYSERVER_OPTIONS --send-keys '0x${keyID}!'"
+
+# remove the tmp file
+trap - EXIT
+rm -rf "$GNUPGHOME"
+
+}

@@ -1,0 +1,72 @@
+# -*-shell-script-*-
+# This should be sourced by bash (though we welcome changes to make it POSIX sh compliant)
+
+# Monkeysphere host revoke-hostname subcommand
+#
+# The monkeysphere scripts are written by:
+# Jameson Rollins <jrollins@finestructure.net>
+# Jamie McClelland <jm@mayfirst.org>
+# Daniel Kahn Gillmor <dkg@fifthhorseman.net>
+#
+# They are Copyright 2008-2010, and are all released under the GPL,
+# version 3 or later.
+
+# revoke service name user ID from host key
+
+revoke_name() {
+
+local serviceName
+local keyID
+local fingerprint
+local tmpuidMatch
+local line
+local message
+local revuidCommand
+
+if [ -z "$1" ] ; then
+    failure "You must specify a service name to revoke."
+fi
+serviceName="$1"
+shift
+
+keyID=$(check_key_input "$@")
+
+# make sure the user ID to revoke exists
+check_key_userid "$keyID" "$serviceName" || \
+    failure "No non-revoked service name found matching '$serviceName'."
+
+if [ "$PROMPT" != "false" ] ; then
+    printf "The following service name on key '$keyID' will be revoked:\n  %s\nAre you sure you would like to revoke this service name? (Y/n) " "$serviceName" >&2
+    read OK; OK=${OK:=Y}
+    if [ "${OK/y/Y}" != 'Y' ] ; then
+	failure "User ID not revoked."
+    fi
+else
+    log debug "revoking service name without prompting."
+fi
+
+# actually revoke:
+
+# the gpg secring might not contain the host key we are trying to
+# revoke (let alone any selfsig over that host key), but the plain
+# --export won't contain the secret key.  "keytrans revokeuserid"
+# needs access to both pieces, so we feed it both of them.
+
+if (cat "$GNUPGHOME_HOST/secring.gpg" && gpg_host --export "$keyID") \
+    | "$SYSSHAREDIR/keytrans" revokeuserid "$keyID" "$serviceName" \
+    | gpg_host --import ; then
+
+    gpg_host --check-trustdb
+
+    update_pgp_pub_file
+
+    show_key "$keyID"
+
+    echo
+    echo "NOTE: Service name revoked, but revocation not published."
+    echo "Run '$PGRM publish-key' to publish the revocation."
+else
+    failure "Problem revoking service name."
+fi
+
+}

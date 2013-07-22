@@ -1,0 +1,37 @@
+# -*-shell-script-*-
+
+failed_cleanup() {
+    # FIXME: can we be more verbose here?
+    echo 'FAILED!'
+    if [ -z "$MONKEYSPHERE_TEST_NO_EXAMINE" ] ; then
+	printf "press enter to cleanup and remove tmp (or type 'bash' for a subshell to examine): " >&2
+	read XX
+	if [ "$XX" = bash ] ; then
+	    echo "Entering subshell..."
+	    cd "$TEMPDIR"
+	    bash
+	fi
+    fi
+
+    cleanup
+}
+
+get_gpg_prng_arg() {
+    if (gpg --quick-random --version >/dev/null 2>&1) ; then
+	echo quick-random
+    elif (gpg --debug-quick-random --version >/dev/null 2>&1) ; then
+	echo debug-quick-random
+    fi
+}
+
+cleanup() {
+    echo "### removing temp dir..."
+    rm -rf "$TEMPDIR"
+
+    if [ "$SSHD_PID" ] ; then
+	echo "### killing off lingering sshd..."
+	kill "$SSHD_PID"
+    fi
+
+    wait
+}

@@ -1,0 +1,214 @@
+#!/bin/bash
+
+# This is a post-install script for monkeysphere, to transition an old
+# (<0.23) setup to the new (>=0.23) setup.
+
+# You should be able to run this script after any version >= 0.23 is
+# installed.  This script should be well-behaved, even if it is run
+# repeatedly.
+
+# Written by
+# Jameson Rollins <jrollins@finestructure.net>
+# Daniel Kahn Gillmor <dkg@fifthhorseman.net>
+#
+# Copyright 2009, released under the GPL, version 3 or later
+
+# NOTE: the reverse operation (downgrading) is not directly supported,
+# and MAY LOCK YOU OUT OF YOUR SYSTEM, depending on how you have
+# configured the monkeysphere!
+
+# any unexpected errors should cause this script to bail:
+set -e
+
+SYSSHAREDIR=${MONKEYSPHERE_SYSSHAREDIR:-"__SYSSHAREDIR_PREFIX__/share/monkeysphere"}
+export SYSSHAREDIR
+. "${SYSSHAREDIR}/defaultenv"
+
+MADATADIR="${SYSDATADIR}/authentication"
+MHDATADIR="${SYSDATADIR}/host"
+
+STASHDIR="${SYSDATADIR}/backup-from-0.23-transition"
+
+
+log() {
+    printf "$@" >&2
+}
+
+# FIXME: implement this function better.  here, we only care about
+# dots, *and* about reversing the regexification of them.
+gpg_unescape_and_unregex() {
+    sed  's/\\x5c\././g'
+}
+
+
+is_domain_name() {
+    printf "%s" "$1" | egrep -q '^[[:alnum:]][[:alnum:]-.]*[[:alnum:]]$'
+}
+
+
+# move the old server conf file to be the authentication conf file
+if [ -f "$SYSCONFIGDIR"/monkeysphere-server.conf -a \
+    ! -f "$SYSCONFIGDIR"/monkeysphere-authentication.conf ] ; then
+    mv "$SYSCONFIGDIR"/monkeysphere-server.conf "$SYSCONFIGDIR"/monkeysphere-authentication.conf
+fi
+
+# run the authentication setup (this is also the first chance to bail
+# if 0.23 is not fully-installed, because m-a did not exist before
+# 0.23)
+monkeysphere-authentication setup
+
+# before 0.23, the old gnupg-host data directory used to contain the
+# trust core and the system's ssh host key.  
+
+if [ -d "$SYSDATADIR"/gnupg-host ] ; then
+
+### transfer identity certifiers, if they don't already exist in the
+### current setup:
+
+    if monkeysphere-authentication list-identity-certifiers | \
+	grep -q '^[A-F0-9]{40}:$' ; then
+	log 'There are already certifiers in the new system!\nNot transferring any certifiers.\n'
+    else
+	# get the old host keygrip (don't know why there would be more
+	# than one, but we'll transfer all tsigs made by any key that
+	# had been given ultimate ownertrust):
+	for authgrip in $(GNUPGHOME="$SYSDATADIR"/gnupg-host gpg --quiet --no-tty --no-permission-warning --export-ownertrust | \
+	    grep ':6:$' | \
+	    sed -r 's/^[A-F0-9]{24}([A-F0-9]{16}):6:$/\1/') ; do
+	    
+	# we're assuming that old id certifiers were only added by old
+	# versions of m-s c+, which added certifiers by ltsigning
+	# entire keys.
+	    
+	# so we'll walk the list of tsigs from the old host key, and
+	# add those keys as certifiers to the new system.
+
+	    # FIXME: if an admin has run "m-s add-id-certifier $foo"
+	    # multiple times for the same $foo, we'll only transfer
+	    # one of those certifications (even if later
+	    # certifications had different parameters).
+	    
+	    GNUPGHOME="$SYSDATADIR"/gnupg-host gpg --quiet --no-tty --no-permission-warning --fingerprint --with-colons --fixed-list-mode --check-sigs | \
+		cut -f 1,2,5,8,9,10 -d: | \
+		egrep '^(fpr:::::|sig:!:'"$authgrip"':[[:digit:]]+ [[:digit:]]+:)' | \
+		while IFS=: read -r type validity grip trustparams trustdomain fpr ; do
+		case $type in
+		    'fpr') # this is a new key
+			keyfpr=$fpr
+			;;
+		    'sig') # deal with all trust signatures, including
+			   # regexes if present.
+			if [ "$keyfpr" ] ; then
+			    trustdepth=${trustparams%% *}
+			    trustlevel=${trustparams##* }
+			    if [ "$trustlevel" -ge 120 ] ; then
+				truststring=full
+			    elif [ "$trustlevel" -ge 60 ] ; then
+				truststring=marginal
+			    else
+				# trust levels below marginal are ignored.
+				continue
+			    fi
+
+			    finaldomain=
+			    if [ "$trustdomain" ] ; then
+			    # FIXME: deal with translating
+			    # $trustdomain back to a domain.
+				if [ printf "%s" "$trustdomain" | egrep -q '^<\[\^>\]\+\[@\.\][^>]+>\$$' ] ; then
+				    dpart=$(printf "%s" "$trustdomain" | sed -r 's/^<\[\^>\]\+\[@\.\]([^>]+)>\$$/\1/' | gpg_unescape_and_unregex)
+				    if [ is_domain_name "$dpart" ]; then
+					finaldomain="--domain $dpart"
+				    else
+					log "Does not seem to be a domain name (%s), not adding certifier\n" "$dpart"
+					continue
+				    fi
+				else
+				    log "Does not seem to be a standard gpg domain-based tsig (%s), not adding certifier\n" "$trustdomain"
+				    continue
+				fi
+			    fi
+
+			    CERTKEY=$(mktemp ${TMPDIR:-/tmp}/mstransition.XXXXXXXX)
+			    log "Adding identity certifier with fingerprint %s\n" "$keyfpr"
+			    GNUPGHOME="$SYSDATADIR"/gnupg-host gpg --quiet --no-tty --no-permission-warning --export "0x$keyfpr" --export-options export-clean >"$CERTKEY"
+			    MONKEYSPHERE_PROMPT=false monkeysphere-authentication add-identity-certifier $finaldomain --trust "$truststring" --depth "$trustdepth" "$CERTKEY"
+			    rm -f "$CERTKEY"
+			    # clear the fingerprint so that we don't
+			    # make additional tsigs on it if more uids
+			    # are present:
+			    keyfpr=
+			fi
+			;;
+		esac
+	    done
+	done
+    fi
+
+### transfer host key information (if present) into the new spot
+    
+    if [ -d "${MHDATADIR}" ] ; then
+	log "Not transferring host key info because host directory already exists.\n"
+    else
+	if [ -s "$SYSDATADIR"/ssh_host_rsa_key ] || \
+	    GNUPGHOME="$SYSDATADIR"/gnupg-host gpg --quiet --no-tty --no-permission-warning --with-colons --list-secret-keys | grep -q '^sec:' ; then
+	    
+	    FPR=$(GNUPGHOME="$SYSDATADIR"/gnupg-host gpg --quiet --no-tty --no-permission-warning --with-colons --fixed-list-mode --list-secret-keys --fingerprint | awk -F: '/^fpr:/{ print $10 }' )
+	    
+	# create host home
+	    mkdir -p $(dirname "$MHDATADIR")
+	    NEWDATADIR=$(mktemp -d "${MHDATADIR}.XXXXXX")
+	    chmod 0700 "${NEWDATADIR}"
+	    
+	    log "importing host key from old monkeysphere installation\n"
+
+# export from the pubring as well as the that new (non-expired)
+# self-sigs are available, otherwise the secret key import may fail
+
+# FIXME: turns out the secret key import fails anyway, stupidly :(
+
+# FIXME: if all self-sigs are expired, then the secret key import may
+# fail anyway. How should we deal with that?
+	    
+	    if (GNUPGHOME="$SYSDATADIR"/gnupg-host gpg --quiet --no-tty --no-permission-warning --export-secret-keys && \
+		GNUPGHOME="$SYSDATADIR"/gnupg-host gpg --quiet --no-tty --no-permission-warning --export "$FPR") | \
+		GNUPGHOME="$NEWDATADIR" gpg --quiet --no-tty --import ; then
+		: we are in good shape!
+	    else
+		if ! GNUPGHOME="$NEWDATADIR" gpg --quiet --no-tty --list-secret-key >/dev/null ; then
+		    log "The old host key (%s) was not imported properly.\n" "$FPR"
+		    exit 1
+		fi
+	    fi
+		
+	    # if we get here cleanly, then we're OK to move forward:
+	    mv "$NEWDATADIR" "$MHDATADIR"
+
+	    monkeysphere-host update-gpg-pub-file
+	else
+	    log "No host key found in old monkeysphere install; not importing any host key.\n"
+	fi
+    fi
+
+
+### get rid of this old stuff, since we've transferred it all:
+
+    mkdir -p "$STASHDIR"
+    chmod 0700 "$STASHDIR"
+    mv "${SYSDATADIR}/gnupg-host" "$STASHDIR"/gnupg-host.$(date '+%F_%T%z')
+fi
+
+
+# There is nothing in the old authentication directory that we should
+# need to keep around, but it is not unreasonable to transfer keys to
+# the new authentication keyring.
+if [ -d "${SYSDATADIR}/gnupg-authentication" ] ; then
+
+    GNUPGHOME="${SYSDATADIR}/gnupg-authentication" \
+	gpg --quiet --no-tty --no-permission-warning --export 2>/dev/null | \
+	monkeysphere-authentication gpg-cmd --import 2>/dev/null || \
+	log "No OpenPGP certificates imported into monkeysphere-authentication trust sphere.\n"
+
+    mkdir -p "$STASHDIR"
+    chmod 0700 "$STASHDIR"
+    mv "${SYSDATADIR}/gnupg-authentication" "$STASHDIR"/gnupg-authentication.$(date '+%F_%T%z')
+fi

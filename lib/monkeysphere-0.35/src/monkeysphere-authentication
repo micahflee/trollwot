@@ -1,0 +1,230 @@
+#!/usr/bin/env bash
+
+# monkeysphere-authentication: Monkeysphere authentication admin tool
+#
+# The monkeysphere scripts are written by:
+# Jameson Rollins <jrollins@finestructure.net>
+# Jamie McClelland <jm@mayfirst.org>
+# Daniel Kahn Gillmor <dkg@fifthhorseman.net>
+# Micah Anderson <micah@riseup.net>
+#
+# They are Copyright 2008-2009, and are all released under the GPL,
+# version 3 or later.
+
+########################################################################
+set -e
+
+# set the pipefail option so pipelines fail on first command failure
+set -o pipefail
+
+PGRM=$(basename $0)
+
+SYSSHAREDIR=${MONKEYSPHERE_SYSSHAREDIR:-"__SYSSHAREDIR_PREFIX__/share/monkeysphere"}
+export SYSSHAREDIR
+. "${SYSSHAREDIR}/defaultenv"
+. "${SYSSHAREDIR}/common"
+
+# sharedir for authentication functions
+MASHAREDIR="${SYSSHAREDIR}/ma"
+
+# datadir for authentication functions
+MADATADIR="${SYSDATADIR}/authentication"
+
+# temp directory to enable atomic moves of authorized_keys files
+MATMPDIR="${MADATADIR}/tmp"
+export MATMPDIR
+
+# UTC date in ISO 8601 format if needed
+DATE=$(date -u '+%FT%T')
+
+# unset some environment variables that could screw things up
+unset GREP_OPTIONS
+
+########################################################################
+# FUNCTIONS
+########################################################################
+
+usage() {
+    cat <<EOF >&2
+usage: $PGRM <subcommand> [options] [args]
+Monkeysphere authentication admin tool.
+
+subcommands:
+ update-users (u) [USER]...        update user authorized_keys files
+ keys-for-user (k) USER            output user authorized_keys lines to stdout
+ refresh-keys (r)                  refresh keys in keyring
+
+ add-id-certifier (c+) KEYID|FILE  import and tsign a certification key
+   [--domain (-n) DOMAIN]            limit ID certifications to DOMAIN
+   [--trust (-t) TRUST]              trust level of certifier (default: full)
+   [--depth (-d) DEPTH]              trust depth for certifier (default: 1)
+ remove-id-certifier (c-) KEYID    remove a certification key
+ list-id-certifiers (c)            list certification keys
+
+ version (v)                       show version number
+ help (h,?)                        this help
+
+See ${PGRM}(8) for more info.
+EOF
+}
+
+# function to interact with the gpg core keyring
+gpg_core() {
+    GNUPGHOME="$GNUPGHOME_CORE"
+    export GNUPGHOME
+
+    gpg --fixed-list-mode --no-greeting --quiet --no-tty "$@"
+}
+
+# function to interact with the gpg sphere keyring
+gpg_sphere() {
+    GNUPGHOME="$GNUPGHOME_SPHERE"
+    export GNUPGHOME
+ 
+    su_monkeysphere_user "gpg --fixed-list-mode --no-greeting --quiet --no-tty $@"
+}
+
+# output to stdout the core fingerprint from the gpg core secret
+# keyring
+core_fingerprint() {
+    log debug "determining core key fingerprint..."
+    gpg_core --list-secret-key --with-colons \
+        --with-fingerprint \
+	| grep ^fpr: | cut -d: -f10
+}
+
+# export signatures from core to sphere
+gpg_core_sphere_sig_transfer() {
+    log debug "exporting core local sigs to sphere..."
+    gpg_core --export-options export-local-sigs --export | \
+	gpg_sphere --import-options import-local-sigs --import 2>&1 | log debug
+}
+
+########################################################################
+# MAIN
+########################################################################
+
+# set unset default variables
+AUTHORIZED_USER_IDS="%h/.monkeysphere/authorized_user_ids"
+RAW_AUTHORIZED_KEYS="%h/.ssh/authorized_keys"
+
+# load configuration file
+[ -e ${MONKEYSPHERE_AUTHENTICATION_CONFIG:="${SYSCONFIGDIR}/monkeysphere-authentication.conf"} ] \
+    && . "$MONKEYSPHERE_AUTHENTICATION_CONFIG"
+
+# set empty config variable with ones from the environment
+LOG_LEVEL=${MONKEYSPHERE_LOG_LEVEL:=$LOG_LEVEL}
+KEYSERVER=${MONKEYSPHERE_KEYSERVER:=$KEYSERVER}
+CHECK_KEYSERVER=${MONKEYSPHERE_CHECK_KEYSERVER:=$CHECK_KEYSERVER}
+MONKEYSPHERE_USER=${MONKEYSPHERE_MONKEYSPHERE_USER:=$MONKEYSPHERE_USER}
+MONKEYSPHERE_GROUP=$(get_primary_group "$MONKEYSPHERE_USER")
+PROMPT=${MONKEYSPHERE_PROMPT:=$PROMPT}
+AUTHORIZED_USER_IDS=${MONKEYSPHERE_AUTHORIZED_USER_IDS:=$AUTHORIZED_USER_IDS}
+RAW_AUTHORIZED_KEYS=${MONKEYSPHERE_RAW_AUTHORIZED_KEYS:=$RAW_AUTHORIZED_KEYS}
+STRICT_MODES=${MONKEYSPHERE_STRICT_MODES:=$STRICT_MODES}
+
+# other variables
+REQUIRED_USER_KEY_CAPABILITY=${MONKEYSPHERE_REQUIRED_USER_KEY_CAPABILITY:="a"}
+GNUPGHOME_CORE=${MONKEYSPHERE_GNUPGHOME_CORE:="${MADATADIR}/core"}
+GNUPGHOME_SPHERE=${MONKEYSPHERE_GNUPGHOME_SPHERE:="${MADATADIR}/sphere"}
+CORE_KEYLENGTH=${MONKEYSPHERE_CORE_KEYLENGTH:="2048"}
+LOG_PREFIX=${MONKEYSPHERE_LOG_PREFIX:='ms: '}
+
+# export variables needed in su invocation
+export DATE
+export LOG_LEVEL
+export KEYSERVER
+export MONKEYSPHERE_USER
+export MONKEYSPHERE_GROUP
+export PROMPT
+export CHECK_KEYSERVER
+export REQUIRED_USER_KEY_CAPABILITY
+export GNUPGHOME_CORE
+export GNUPGHOME_SPHERE
+export GNUPGHOME
+export CORE_KEYLENGTH
+export LOG_PREFIX
+
+if [ "$#" -eq 0 ] ; then 
+    usage
+    failure "Please supply a subcommand."
+fi
+
+# get subcommand
+COMMAND="$1"
+shift
+
+case $COMMAND in
+    'setup'|'setup'|'s')
+	source "${MASHAREDIR}/setup"
+	setup
+	;;
+
+    'update-users'|'update-user'|'update'|'u')
+	source "${MASHAREDIR}/setup"
+	setup
+	source "${MASHAREDIR}/update_users"
+	OUTPUT_STDOUT= update_users "$@"
+	;;
+
+    'keys-for-user'|'k')
+	(( $# > 0 )) || failure "Must specify user."
+	source "${MASHAREDIR}/setup"
+	setup
+	source "${MASHAREDIR}/update_users"
+	OUTPUT_STDOUT=true update_users "$1"
+	;;
+
+    'refresh-keys'|'refresh'|'r')
+	source "${MASHAREDIR}/setup"
+	setup
+	gpg_sphere --keyserver "$KEYSERVER" --refresh-keys
+	;;
+
+    'add-identity-certifier'|'add-id-certifier'|'add-certifier'|'c+')
+	source "${MASHAREDIR}/setup"
+	setup
+	source "${MASHAREDIR}/add_certifier"
+	add_certifier "$@"
+	;;
+
+    'remove-identity-certifier'|'remove-id-certifier'|'remove-certifier'|'c-')
+	source "${MASHAREDIR}/setup"
+	setup
+	source "${MASHAREDIR}/remove_certifier"
+	remove_certifier "$@"
+	;;
+
+    'list-identity-certifiers'|'list-id-certifiers'|'list-certifiers'|'list-certifier'|'c')
+	source "${MASHAREDIR}/setup"
+	setup
+	source "${MASHAREDIR}/list_certifiers"
+	list_certifiers
+	;;
+
+    'diagnostics'|'d')
+	source "${MASHAREDIR}/setup"
+	setup
+	source "${MASHAREDIR}/diagnostics"
+	diagnostics
+	;;
+
+    'gpg-cmd')
+	source "${MASHAREDIR}/setup"
+	setup
+	gpg_sphere "$@"
+	;;
+
+    'version'|'--version'|'v')
+	version
+	;;
+
+    '--help'|'help'|'-h'|'h'|'?')
+        usage
+        ;;
+
+    *)
+        failure "Unknown command: '$COMMAND'
+Try '$PGRM help' for usage."
+        ;;
+esac

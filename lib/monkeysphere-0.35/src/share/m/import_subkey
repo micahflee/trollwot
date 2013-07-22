@@ -1,0 +1,68 @@
+# -*-shell-script-*-
+# This should be sourced by bash (though we welcome changes to make it POSIX sh compliant)
+
+# Monkeysphere import-subkey subcommand
+#
+# The monkeysphere scripts are written by:
+# Jameson Rollins <jrollins@finestructure.net>
+# Jamie McClelland <jm@mayfirst.org>
+# Daniel Kahn Gillmor <dkg@fifthhorseman.net>
+#
+# They are Copyright 2008-2009, and are all released under the GPL,
+# version 3 or later.
+
+# import an existing ssh key as a gpg subkey
+
+## 2009-02-20 00:49:11-0500: This is not implemented yet, because we
+## don't currently have a good way to manipulate the user's OpenPGP
+## secret key such that we could make a proper subkey binding
+## signature.
+
+import_subkey() {
+    local sshKeyFile
+    local keyID
+    local gpgSecOut
+    local fifoDir
+
+    # FIXME: implement!
+    failure "import-subkey is not implemented yet.  We welcome patches.  Sorry!"
+
+    sshKeyFile="$1"
+    shift
+
+    # check that key file specified
+    if [ -z "$sshKeyFile" ] ; then
+	failure "Must specify ssh key file to import, or specify '-' for stdin."
+    fi
+
+    # check that the keyID is unique
+    keyID=$(check_gpg_sec_key_id "$@")
+
+    # check that an authentication subkey does not already exist
+    check_gpg_authentication_subkey "$keyID"
+
+    # setup the temp fifo dir for retrieving the key password
+    log debug "creating password fifo..."
+    fifoDir=$(msmktempdir)
+    trap "rm -rf $fifoDir" EXIT
+    (umask 077 && mkfifo "$fifoDir/pass")
+
+    # import ssh key to as authentication subkey
+    if [ "$sshKeyFile" = '-' ] ; then
+	log verbose "importing ssh key from stdin..."
+	PEM2OPENPGP_USAGE_FLAGS=authenticate pem2openpgp "$userID" \
+	    | gpg_user --passphrase-fd 3 3< "$fifoDir/pass" --expert --command-fd 0 --import &
+    else
+	log verbose "importing ssh key from file '$sshKeyFile'..."
+	PEM2OPENPGP_USAGE_FLAGS=authenticate pem2openpgp "$userID" <"$sshKeyFile" \
+	    | gpg_user --passphrase-fd 3 3< "$fifoDir/pass" --expert --command-fd 0 --import &
+    fi
+
+    # get the password if needed
+    passphrase_prompt  "Please enter your passphrase for $keyID: " "$fifoDir/pass"
+
+    trap - EXIT
+    rm -rf "$fifoDir"
+    wait
+    log verbose "done."
+}

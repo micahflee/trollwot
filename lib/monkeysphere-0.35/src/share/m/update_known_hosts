@@ -1,0 +1,77 @@
+# -*-shell-script-*-
+# This should be sourced by bash (though we welcome changes to make it POSIX sh compliant)
+
+# Monkeysphere update_known_hosts subcommand
+#
+# The monkeysphere scripts are written by:
+# Jameson Rollins <jrollins@finestructure.net>
+# Jamie McClelland <jm@mayfirst.org>
+# Daniel Kahn Gillmor <dkg@fifthhorseman.net>
+#
+# They are Copyright 2010, and are all released under the GPL, version
+# 3 or later.
+
+# update the known_hosts file for a set of hosts listed on command
+# line
+update_known_hosts() {
+    local tmpFile
+    local host
+
+    # touch the known_hosts file so that the file permission check
+    # below won't fail upon not finding the file
+    touch_key_file_or_fail "$KNOWN_HOSTS"
+    check_key_file_permissions $(whoami) "$KNOWN_HOSTS" \
+	|| failure "Bad permissions governing known_hosts file $KNOWN_HOSTS"
+
+    lock create "$KNOWN_HOSTS"
+
+    # FIXME: we're discarding any pre-existing EXIT trap; is this bad?
+    trap "log debug TRAP; lock remove $KNOWN_HOSTS" EXIT
+
+    tmpFile=$(mktemp "${KNOWN_HOSTS}.monkeysphere.XXXXXX")
+
+    trap "log debug TRAP; lock remove $KNOWN_HOSTS; rm -f $tmpFile" EXIT
+
+    cat "$KNOWN_HOSTS" >"$tmpFile"
+
+    for host ; do
+	FILE_TYPE='known_hosts' process_keys_for_file "$tmpFile" "ssh://${host}"
+
+	lock touch "$KNOWN_HOSTS"
+    done
+
+    if [ "$(file_hash "$KNOWN_HOSTS")" != "$(file_hash "$tmpFile")" ] ; then
+	mv -f "$tmpFile" "$KNOWN_HOSTS"
+	log debug "known_hosts file updated."
+    else
+	rm -f "$tmpFile"
+    fi
+
+    lock remove "$KNOWN_HOSTS"
+
+    trap - EXIT
+}
+
+# process hosts from a known_hosts file
+process_known_hosts() {
+    local hosts
+
+    if [ ! -e "$KNOWN_HOSTS" ] ; then
+	failure "known_hosts file '$KNOWN_HOSTS' does not exist."
+    fi
+
+    log debug "processing known_hosts file:"
+    log debug " $KNOWN_HOSTS"
+
+    hosts=$(meat "$KNOWN_HOSTS" | cut -d ' ' -f 1 | grep -v '^|.*$' | tr , ' ' | tr '\n' ' ')
+
+    if [ -z "$hosts" ] ; then
+	log debug "no hosts to process."
+	return
+    fi
+
+    # take all the hosts from the known_hosts file (first
+    # field), grep out all the hashed hosts (lines starting
+    # with '|')...
+    update_known_hosts $hosts
+}

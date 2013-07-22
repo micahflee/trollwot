@@ -1,0 +1,7 @@
+#!/usr/bin/make -f
+%:
+	dh $@
+
+override_dh_auto_install:
+	dh_auto_install
+	rm -f $(CURDIR)/debian/monkeysphere/usr/share/doc/monkeysphere/Changelog

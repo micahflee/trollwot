@@ -1,0 +1,974 @@
+# -*-shell-script-*-
+# This should be sourced by bash (though we welcome changes to make it POSIX sh compliant)
+
+# Shared sh functions for the monkeysphere
+#
+# Written by
+# Jameson Rollins <jrollins@finestructure.net>
+# Jamie McClelland <jm@mayfirst.org>
+# Daniel Kahn Gillmor <dkg@fifthhorseman.net>
+#
+# Copyright 2008-2009, released under the GPL, version 3 or later
+
+# all-caps variables are meant to be user supplied (ie. from config
+# file) and are considered global
+
+########################################################################
+### UTILITY FUNCTIONS
+
+# output version info
+version() {
+    cat "${SYSSHAREDIR}/VERSION"
+}
+
+# failure function.  exits with code 255, unless specified otherwise.
+failure() {
+    [ "$1" ] && echo "$1" >&2
+    exit ${2:-'255'}
+}
+
+# write output to stderr based on specified LOG_LEVEL the first
+# parameter is the priority of the output, and everything else is what
+# is echoed to stderr.  If there is nothing else, then output comes
+# from stdin, and is not prefaced by log prefix.
+log() {
+    local priority
+    local level
+    local output
+    local alllevels
+    local found=
+
+    # don't include SILENT in alllevels: it's handled separately
+    # list in decreasing verbosity (all caps).
+    # separate with $IFS explicitly, since we do some fancy footwork
+    # elsewhere.
+    alllevels="DEBUG${IFS}VERBOSE${IFS}INFO${IFS}ERROR"
+
+    # translate lowers to uppers in global log level
+    LOG_LEVEL=$(echo "$LOG_LEVEL" | tr "[:lower:]" "[:upper:]")
+
+    # just go ahead and return if the log level is silent
+    if [ "$LOG_LEVEL" = 'SILENT' ] ; then
+	return
+    fi
+
+    for level in $alllevels ; do 
+	if [ "$LOG_LEVEL" = "$level" ] ; then
+	    found=true
+	fi
+    done
+    if [ -z "$found" ] ; then
+	# default to INFO:
+	LOG_LEVEL=INFO
+    fi
+
+    # get priority from first parameter, translating all lower to
+    # uppers
+    priority=$(echo "$1" | tr "[:lower:]" "[:upper:]")
+    shift
+
+    # scan over available levels
+    for level in $alllevels ; do
+	# output if the log level matches, set output to true
+	# this will output for all subsequent loops as well.
+	if [ "$LOG_LEVEL" = "$level" ] ; then
+	    output=true
+	fi
+	if [ "$priority" = "$level" -a "$output" = 'true' ] ; then
+	    if [ "$1" ] ; then
+		echo "$@"
+	    else
+		cat
+	    fi | sed 's/^/'"${LOG_PREFIX}"'/' >&2
+	fi
+    done
+}
+
+# run command as monkeysphere user
+su_monkeysphere_user() {
+    # our main goal here is to run the given command as the the
+    # monkeysphere user, but without prompting for any sort of
+    # authentication.  If this is not possible, we should just fail.
+
+    # FIXME: our current implementation is overly restrictive, because
+    # there may be some su PAM configurations that would allow su
+    # "$MONKEYSPHERE_USER" -c "$@" to Just Work without prompting,
+    # allowing specific users to invoke commands which make use of
+    # this user.
+
+    # chpst (from runit) would be nice to use, but we don't want to
+    # introduce an extra dependency just for this.  This may be a
+    # candidate for re-factoring if we switch implementation languages.
+
+    case $(id -un) in
+	# if monkeysphere user, run the command under bash
+	"$MONKEYSPHERE_USER")
+	    bash -c "$*"
+	    ;;
+
+         # if root, su command as monkeysphere user
+	'root')
+	    su "$MONKEYSPHERE_USER" -c "$*"
+	    ;;
+
+	# otherwise, fail
+	*)
+	    log error "non-privileged user."
+	    ;;
+    esac
+}
+
+# cut out all comments(#) and blank lines from standard input
+meat() {
+    grep -v -e "^[[:space:]]*#" -e '^$' "$1"
+}
+
+# cut a specified line from standard input
+cutline() {
+    head --line="$1" "$2" | tail -1
+}
+
+# make a temporary directory
+msmktempdir() {
+    mktemp -d ${TMPDIR:-/tmp}/monkeysphere.XXXXXXXXXX
+}
+
+# make a temporary file
+msmktempfile() {
+    mktemp ${TMPDIR:-/tmp}/monkeysphere.XXXXXXXXXX
+}
+
+# this is a wrapper for doing lock functions.
+#
+# it lets us depend on either lockfile-progs (preferred) or procmail's
+# lockfile, and should
+lock() {
+    local use_lockfileprogs=true
+    local action="$1"
+    local file="$2"
+
+    if ! ( type lockfile-create &>/dev/null ) ; then
+	if ! ( type lockfile &>/dev/null ); then
+	    failure "Neither lockfile-create nor lockfile are in the path!"
+	fi
+	use_lockfileprogs=
+    fi
+    
+    case "$action" in
+	create)
+	    if [ -n "$use_lockfileprogs" ] ; then
+		lockfile-create "$file" || failure "unable to lock '$file'"
+	    else
+		lockfile -r 20 "${file}.lock" || failure "unable to lock '$file'"
+	    fi
+	    log debug "lock created on '$file'."
+	    ;;
+	touch)	
+	    if [ -n "$use_lockfileprogs" ] ; then
+		lockfile-touch --oneshot "$file"
+	    else
+		: Nothing to do here
+	    fi
+	    log debug "lock touched on '$file'."
+	    ;;
+	remove)
+	    if [ -n "$use_lockfileprogs" ] ; then
+		lockfile-remove "$file"
+	    else
+		rm -f "${file}.lock"
+	    fi
+	    log debug "lock removed on '$file'."
+	    ;;
+	*)
+	    failure "bad argument for lock subfunction '$action'"
+    esac
+}
+
+
+# for portability, between gnu date and BSD date.
+# arguments should be:  number longunits format
+
+# e.g. advance_date 20 seconds +%F
+advance_date() {
+    local gnutry
+    local number="$1"
+    local longunits="$2"
+    local format="$3"
+    local shortunits
+
+    # try things the GNU way first 
+    if date -d "$number $longunits" "$format" &>/dev/null; then
+	date -d "$number $longunits" "$format"
+    else
+	# otherwise, convert to (a limited version of) BSD date syntax:
+	case "$longunits" in
+	    years)
+		shortunits=y
+		;;
+	    months)
+		shortunits=m
+		;;
+	    weeks)
+		shortunits=w
+		;;
+	    days)
+		shortunits=d
+		;;
+	    hours)
+		shortunits=H
+		;;
+	    minutes)
+		shortunits=M
+		;;
+	    seconds)
+		shortunits=S
+		;;
+	    *)
+		# this is a longshot, and will likely fail; oh well.
+		shortunits="$longunits"
+	esac
+	date "-v+${number}${shortunits}" "$format"
+    fi
+}
+
+
+# check that characters are in a string (in an AND fashion).
+# used for checking key capability
+# check_capability capability a [b...]
+check_capability() {
+    local usage
+    local capcheck
+
+    usage="$1"
+    shift 1
+
+    for capcheck ; do
+	if echo "$usage" | grep -q -v "$capcheck" ; then
+	    return 1
+	fi
+    done
+    return 0
+}
+
+# hash of a file
+file_hash() {
+    if type md5sum &>/dev/null ; then
+	md5sum "$1"
+    elif type md5 &>/dev/null ; then
+	md5 "$1"
+    else
+	failure "Neither md5sum nor md5 are in the path!"
+    fi
+}
+
+# convert escaped characters in pipeline from gpg output back into
+# original character
+# FIXME: undo all escape character translation in with-colons gpg
+# output
+gpg_unescape() {
+    sed 's/\\x3a/:/g'
+}
+
+# convert nasty chars into gpg-friendly form in pipeline
+# FIXME: escape everything, not just colons!
+gpg_escape() {
+    sed 's/:/\\x3a/g'
+}
+
+# prompt for GPG-formatted expiration, and emit result on stdout
+get_gpg_expiration() {
+    local keyExpire
+
+    keyExpire="$1"
+
+    if [ -z "$keyExpire" -a "$PROMPT" != 'false' ]; then
+	cat >&2 <<EOF
+Please specify how long the key should be valid.
+         0 = key does not expire
+      <n>  = key expires in n days
+      <n>w = key expires in n weeks
+      <n>m = key expires in n months
+      <n>y = key expires in n years
+EOF
+	while [ -z "$keyExpire" ] ; do
+	    printf "Key is valid for? (0) " >&2
+	    read keyExpire
+	    if ! test_gpg_expire ${keyExpire:=0} ; then
+		echo "invalid value" >&2
+		unset keyExpire
+	    fi
+	done
+    elif ! test_gpg_expire "$keyExpire" ; then
+	failure "invalid key expiration value '$keyExpire'."
+    fi
+	
+    echo "$keyExpire"
+}
+
+passphrase_prompt() {
+    local prompt="$1"
+    local fifo="$2"
+    local PASS
+
+    if [ "$DISPLAY" ] && type "${SSH_ASKPASS:-ssh-askpass}" >/dev/null 2>/dev/null; then
+	printf 'Launching "%s"\n' "${SSH_ASKPASS:-ssh-askpass}" | log info
+	printf '(with prompt "%s")\n' "$prompt" | log debug
+	"${SSH_ASKPASS:-ssh-askpass}" "$prompt" > "$fifo"
+    else
+	read -s -p "$prompt" PASS
+	# Uses the builtin echo, so should not put the passphrase into
+	# the process table.  I think. --dkg
+	echo "$PASS" > "$fifo"
+    fi
+}
+
+# remove all lines with specified string from specified file
+remove_line() {
+    local file
+    local lines
+    local tempfile
+
+    file="$1"
+    shift
+
+    if [ ! -e "$file" ] ; then
+	return 1
+    fi
+
+    if (($# == 1)) ; then
+	lines=$(grep -F "$1" "$file") || true
+    else
+	lines=$(grep -F "$1" "$file" | grep -F "$2") || true
+    fi
+
+    # if the string was found, remove it
+    if [ "$lines" ] ; then
+	log debug "removing matching key lines..."
+	tempfile=$(mktemp "${file}.XXXXXXX") || \
+	    failure "Unable to make temp file '${file}.XXXXXXX'"
+	grep -v -x -F "$lines" "$file" >"$tempfile" || :
+	mv -f "$tempfile" "$file"
+    fi
+}
+
+# remove all lines with MonkeySphere strings from stdin
+remove_monkeysphere_lines() {
+    egrep -v ' MonkeySphere[[:digit:]]{4}(-[[:digit:]]{2}){2}T[[:digit:]]{2}(:[[:digit:]]{2}){2} '
+}
+
+# translate ssh-style path variables %h and %u
+translate_ssh_variables() {
+    local uname
+    local home
+
+    uname="$1"
+    path="$2"
+
+    # get the user's home directory
+    userHome=$(get_homedir "$uname")
+
+    # translate '%u' to user name
+    path=${path/\%u/"$uname"}
+    # translate '%h' to user home directory
+    path=${path/\%h/"$userHome"}
+
+    echo "$path"
+}
+
+# test that a string to conforms to GPG's expiration format
+test_gpg_expire() {
+    echo "$1" | egrep -q "^[0-9]+[mwy]?$"
+}
+
+# touch a key file if it doesn't exist, including creating needed
+# directories with correct permissions
+touch_key_file_or_fail() {
+    local keyFile="$1"
+    local newUmask
+
+    if [ ! -f "$keyFile" ]; then
+	# make sure to create files and directories with the
+	# appropriate write bits turned off:
+	newUmask=$(printf "%04o" $(( 0$(umask) | 0022 )) )
+	[ -d $(dirname "$keyFile") ] \
+	    || (umask "$newUmask" && mkdir -p -m 0700 $(dirname "$keyFile") ) \
+	    || failure "Could not create path to $keyFile"
+	# make sure to create this file with the appropriate bits turned off:
+	(umask "$newUmask" && touch "$keyFile") \
+	    || failure "Unable to create $keyFile"
+    fi
+}
+
+# check that a file is properly owned, and that all it's parent
+# directories are not group/other writable
+check_key_file_permissions() {
+    local uname
+    local path
+
+    uname="$1"
+    path="$2"
+
+    if [ "$STRICT_MODES" = 'false' ] ; then
+	log debug "skipping path permission check for '$path' because STRICT_MODES is false..."
+	return 0
+    fi
+    log debug "checking path permission '$path'..."
+    "${SYSSHAREDIR}/checkperms" "$uname" "$path"
+}
+
+# return a list of all users on the system
+list_users() {
+    if type getent &>/dev/null ; then
+	# for linux and FreeBSD systems
+	getent passwd | cut -d: -f1
+    elif type dscl &>/dev/null ; then
+	# for Darwin systems
+	dscl localhost -list /Search/Users
+    else
+	failure "Neither getent or dscl is in the path!  Could not determine list of users."
+    fi
+}
+
+# take one argument, a service name.  in response, print a series of
+# lines, each with a unique numeric port number that might be
+# associated with that service name.  (e.g. in: "https", out: "443")
+# if nothing is found, print nothing, and return 0.
+# 
+# return 1 if there was an error in the search somehow
+get_port_for_service() {
+
+    [[ "$1" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || \
+        failure $(printf "This is not a valid service name: '%s'" "$1")
+    if type getent &>/dev/null ; then
+        # for linux and FreeBSD systems (getent returns 2 if not found, 0 on success, 1 or 3 on various failures)
+        (getent services "$service" || if [ "$?" -eq 2 ] ; then true ; else false; fi) | awk '{ print $2 }' | cut -f1 -d/ | sort -u
+    elif [ -r /etc/services ] ; then
+        # fall back to /etc/services for systems that don't have getent (MacOS?)
+        # FIXME: doesn't handle aliases like "null" (or "http"?), which don't show up at the beginning of the line.
+        awk $(printf '/^%s[[:space:]]/{ print $2 }' "$1") /etc/services | cut -f1 -d/ | sort -u
+    else
+        return 1
+    fi
+}
+
+# return the path to the home directory of a user
+get_homedir() {
+    local uname=${1:-`whoami`}
+    eval "echo ~${uname}"
+}
+
+# return the primary group of a user
+get_primary_group() {
+    local uname=${1:-`whoami`}
+    groups "$uname" | sed 's/^..* : //' | awk '{ print $1 }'
+}
+
+### CONVERSION UTILITIES
+
+# output the ssh key for a given key ID
+gpg2ssh() {
+    local keyID
+    
+    keyID="$1"
+
+    gpg --export --no-armor "$keyID" | openpgp2ssh "$keyID" 2>/dev/null
+}
+
+# output known_hosts line from ssh key
+ssh2known_hosts() {
+    local host
+    local port
+    local key
+
+    # FIXME this does not properly deal with IPv6 hosts using the
+    # standard port (because it's unclear whether their final
+    # colon-delimited address section is a port number or an address
+    # string)
+    host=${1%:*}
+    port=${1##*:}
+    key="$2"
+
+    # specify the host and port properly for new ssh known_hosts
+    # format
+    if [ "$port" != "$host" ] ; then
+	host="[${host}]:${port}"
+    fi
+
+    # hash if specified
+    if [ "$HASH_KNOWN_HOSTS" = 'true' ] ; then
+	if (type ssh-keygen >/dev/null) ; then
+	    log verbose "hashing known_hosts line"
+	    # FIXME: this is really hackish cause
+	    # ssh-keygen won't hash from stdin to
+	    # stdout
+	    tmpfile=$(mktemp ${TMPDIR:-/tmp}/tmp.XXXXXXXXXX)
+	    printf "%s %s MonkeySphere%s\n" "$host" "$key" "$DATE" \
+		> "$tmpfile"
+	    ssh-keygen -H -f "$tmpfile" 2>/dev/null
+	    if [[ "$keyFile" == '-' ]] ; then
+		cat "$tmpfile"
+	    else
+		cat "$tmpfile" >> "$keyFile"
+	    fi
+	    rm -f "$tmpfile" "${tmpfile}.old"
+	    # FIXME: we could do this without needing ssh-keygen.
+	    # hashed known_hosts looks like: |1|X|Y where 1 means SHA1
+	    # (nothing else is defined in openssh sources), X is the
+	    # salt (same length as the digest output), base64-encoded,
+	    # and Y is the digested hostname (also base64-encoded).
+	    # see hostfile.{c,h} in openssh sources.
+	else
+	    log error "Cannot hash known_hosts line as requested."
+	fi
+    else
+	printf "%s %s MonkeySphere%s\n" "$host" "$key" "$DATE"
+    fi
+}
+
+# output authorized_keys line from ssh key
+ssh2authorized_keys() {
+    local userID="$1"
+    local key="$2"
+
+    if [[ "$AUTHORIZED_KEYS_OPTIONS" ]]; then
+        printf "%s %s MonkeySphere%s %s\n" "$AUTHORIZED_KEYS_OPTIONS" "$key" "$DATE" "$userID"
+    else
+	printf "%s MonkeySphere%s %s\n" "$key" "$DATE" "$userID"
+    fi
+}
+
+# convert key from gpg to ssh known_hosts format
+gpg2known_hosts() {
+    local host
+    local keyID
+    local key
+
+    host="$1"
+    keyID="$2"
+
+    key=$(gpg2ssh "$keyID")
+
+    # NOTE: it seems that ssh-keygen -R removes all comment fields from
+    # all lines in the known_hosts file.  why?
+    # NOTE: just in case, the COMMENT can be matched with the
+    # following regexp:
+    # '^MonkeySphere[[:digit:]]{4}(-[[:digit:]]{2}){2}T[[:digit:]]{2}(:[[:digit:]]{2}){2}$'
+    printf "%s %s MonkeySphere%s\n" "$host" "$key" "$DATE"
+}
+
+# convert key from gpg to ssh authorized_keys format
+gpg2authorized_keys() {
+    local userID
+    local keyID
+    local key
+
+    userID="$1"
+    keyID="$2"
+
+    key=$(gpg2ssh "$keyID")
+
+    # NOTE: just in case, the COMMENT can be matched with the
+    # following regexp:
+    # '^MonkeySphere[[:digit:]]{4}(-[[:digit:]]{2}){2}T[[:digit:]]{2}(:[[:digit:]]{2}){2}$'
+    printf "%s MonkeySphere%s %s\n" "$key" "$DATE" "$userID"
+}
+
+### GPG UTILITIES
+
+# script to determine if gpg version is equal to or greater than specified version
+is_gpg_version_greater_equal() {
+    local gpgVersion=$(gpg --version | head -1 | awk '{ print $3 }')
+    local latest=$(printf '%s\n%s\n' "$1" "$gpgVersion" \
+	| tr '.' ' ' | sort -g -k1 -k2 -k3 \
+	| tail -1 | tr ' ' '.')
+    [[ "$gpgVersion" == "$latest" ]]
+}
+
+# retrieve all keys with given user id from keyserver
+# FIXME: need to figure out how to retrieve all matching keys
+# (not just first N (5 in this case))
+gpg_fetch_userid() {
+    local returnCode=0
+    local userID
+
+    if [ "$CHECK_KEYSERVER" != 'true' ] ; then
+	return 0
+    fi
+
+    userID="$1"
+
+    log verbose " checking keyserver $KEYSERVER... "
+    echo 1,2,3,4,5 | \
+	gpg --quiet --batch --with-colons \
+	--command-fd 0 --keyserver "$KEYSERVER" \
+	--search ="$userID" &>/dev/null
+    returnCode="$?"
+
+    if [ "$returnCode" != 0 ] ; then
+        log error "Failure ($returnCode) searching keyserver $KEYSERVER for user id '$userID'"
+    fi
+
+    return "$returnCode"
+}
+
+########################################################################
+### PROCESSING FUNCTIONS
+
+# userid and key policy checking
+# the following checks policy on the returned keys
+# - checks that full key has appropriate valididy (u|f)
+# - checks key has specified capability (REQUIRED_KEY_CAPABILITY)
+# - checks that requested user ID has appropriate validity
+# (see /usr/share/doc/gnupg/DETAILS.gz)
+# output is one line for every found key, in the following format:
+#
+# flag:sshKey
+#
+# "flag" is an acceptability flag, 0 = ok, 1 = bad
+# "sshKey" is the relevant OpenPGP key, in the form accepted by OpenSSH
+#
+# all log output must go to stderr, as stdout is used to pass the
+# flag:sshKey to the calling function.
+process_user_id() {
+    local returnCode=0
+    local userID="$1"
+    local requiredCapability
+    local requiredPubCapability
+    local gpgOut
+    local type
+    local validity
+    local keyid
+    local uidfpr
+    local usage
+    local keyOK
+    local uidOK
+    local lastKey
+    local lastKeyOK
+    local fingerprint
+
+    # set the required key capability based on the mode
+    requiredCapability=${REQUIRED_KEY_CAPABILITY:="a"}
+    requiredPubCapability=$(echo "$requiredCapability" | tr "[:lower:]" "[:upper:]")
+
+    # fetch the user ID if necessary/requested
+    gpg_fetch_userid "$userID"
+
+    # output gpg info for (exact) userid and store
+    gpgOut=$(gpg --list-key --fixed-list-mode --with-colons \
+	--with-fingerprint --with-fingerprint \
+	="$userID" 2>/dev/null) || returnCode="$?"
+
+    # if the gpg query return code is not 0, return 1
+    if [ "$returnCode" -ne 0 ] ; then
+        log verbose " no primary keys found."
+        return 1
+    fi
+
+    # loop over all lines in the gpg output and process.
+    echo "$gpgOut" | cut -d: -f1,2,5,10,12 | \
+    while IFS=: read -r type validity keyid uidfpr usage ; do
+	# process based on record type
+	case $type in
+	    'pub') # primary keys
+		# new key, wipe the slate
+		keyOK=
+		uidOK=
+		lastKey=pub
+		lastKeyOK=
+		fingerprint=
+
+		log verbose " primary key found: $keyid"
+
+		# if overall key is not valid, skip
+		if [ "$validity" != 'u' -a "$validity" != 'f' ] ; then
+		    log debug "  - unacceptable primary key validity ($validity)."
+		    continue
+		fi
+		# if overall key is disabled, skip
+		if check_capability "$usage" 'D' ; then
+		    log debug "  - key disabled."
+		    continue
+		fi
+		# if overall key capability is not ok, skip
+		if ! check_capability "$usage" $requiredPubCapability ; then
+		    log debug "  - unacceptable primary key capability ($usage)."
+		    continue
+		fi
+
+		# mark overall key as ok
+		keyOK=true
+
+		# mark primary key as ok if capability is ok
+		if check_capability "$usage" $requiredCapability ; then
+		    lastKeyOK=true
+		fi
+		;;
+	    'uid') # user ids
+		if [ "$lastKey" != pub ] ; then
+		    log verbose " ! got a user ID after a sub key?!  user IDs should only follow primary keys!"
+		    continue
+		fi
+		# if an acceptable user ID was already found, skip
+		if [ "$uidOK" = 'true' ] ; then
+		    continue
+		fi
+		# if the user ID does matches...
+		if [ "$(echo "$uidfpr" | gpg_unescape)" = "$userID" ] ; then
+		    # and the user ID validity is ok
+		    if [ "$validity" = 'u' -o "$validity" = 'f' ] ; then
+			# mark user ID acceptable
+			uidOK=true
+		    else
+			log debug "  - unacceptable user ID validity ($validity)."
+		    fi
+		else
+		    continue
+		fi
+
+		# output a line for the primary key
+		# 0 = ok, 1 = bad
+		if [ "$keyOK" -a "$uidOK" -a "$lastKeyOK" ] ; then
+		    log verbose "  * acceptable primary key."
+		    if [ -z "$sshKey" ] ; then
+			log verbose "    ! primary key could not be translated (not RSA?)."
+		    else
+			echo "0:${sshKey}"
+		    fi
+		else
+		    log debug "  - unacceptable primary key."
+		    if [ -z "$sshKey" ] ; then
+			log debug "    ! primary key could not be translated (not RSA?)."
+		    else
+			echo "1:${sshKey}"
+		    fi
+		fi
+		;;
+	    'sub') # sub keys
+		# unset acceptability of last key
+		lastKey=sub
+		lastKeyOK=
+		fingerprint=
+		
+		# don't bother with sub keys if the primary key is not valid
+		if [ "$keyOK" != true ] ; then
+		    continue
+		fi
+
+		# don't bother with sub keys if no user ID is acceptable:
+		if [ "$uidOK" != true ] ; then
+		    continue
+		fi
+		
+		# if sub key validity is not ok, skip
+		if [ "$validity" != 'u' -a "$validity" != 'f' ] ; then
+		    log debug "  - unacceptable sub key validity ($validity)."
+		    continue
+		fi
+		# if sub key capability is not ok, skip
+		if ! check_capability "$usage" $requiredCapability ; then
+		    log debug "  - unacceptable sub key capability ($usage)."
+		    continue
+		fi
+
+		# mark sub key as ok
+		lastKeyOK=true
+		;;
+	    'fpr') # key fingerprint
+		fingerprint="$uidfpr"
+
+		sshKey=$(gpg2ssh "$fingerprint")
+
+		# if the last key was the pub key, skip
+		if [ "$lastKey" = pub ] ; then
+		    continue
+		fi
+
+		# output a line for the sub key
+		# 0 = ok, 1 = bad
+		if [ "$keyOK" -a "$uidOK" -a "$lastKeyOK" ] ; then
+		    log verbose "  * acceptable sub key."
+		    if [ -z "$sshKey" ] ; then
+			log error "    ! sub key could not be translated (not RSA?)."
+		    else
+			echo "0:${sshKey}"
+		    fi
+		else
+		    log debug "  - unacceptable sub key."
+		    if [ -z "$sshKey" ] ; then
+			log debug "    ! sub key could not be translated (not RSA?)."
+		    else
+			echo "1:${sshKey}"
+		    fi
+		fi
+		;;
+	esac
+    done | sort -t: -k1 -n -r
+    # NOTE: this last sort is important so that the "good" keys (key
+    # flag '0') come last.  This is so that they take precedence when
+    # being processed in the key files over "bad" keys (key flag '1')
+}
+
+process_keys_for_file() {
+    local keyFile="$1"
+    local userID="$2"
+    local host
+    local ok
+    local sshKey
+    local keyLine
+
+    log verbose "processing: $userID"
+    log debug "key file: $keyFile"
+
+    IFS=$'\n'
+    for line in $(process_user_id "$userID") ; do
+	ok=${line%%:*}
+	sshKey=${line#*:}
+
+        if [ -z "$sshKey" ] ; then
+            continue
+        fi
+
+	# remove the old key line
+	if [[ "$keyFile" != '-' ]] ; then
+	    case "$FILE_TYPE" in
+		('authorized_keys')
+		    remove_line "$keyFile" "$sshKey"
+		    ;;
+		('known_hosts')
+		    host=${userID#ssh://}
+		    remove_line "$keyFile" "$host" "$sshKey"
+		    ;;
+	    esac
+	fi
+
+	((++KEYS_PROCESSED))
+
+	# if key OK, add new key line
+	if [ "$ok" -eq '0' ] ; then
+	    case "$FILE_TYPE" in
+		('raw')
+		    keyLine="$sshKey"
+		    ;;
+		('authorized_keys')
+		    keyLine=$(ssh2authorized_keys "$userID" "$sshKey")
+		    ;;
+		('known_hosts')
+		    host=${userID#ssh://}
+		    keyLine=$(ssh2known_hosts "$host" "$sshKey")
+		    ;;
+	    esac
+
+	    echo "key line: $keyLine" | log debug
+	    if [[ "$keyFile" == '-' ]] ; then
+		echo "$keyLine"
+	    else
+		log debug "adding key line to file..."
+		echo "$keyLine" >>"$keyFile"
+	    fi
+
+	    ((++KEYS_VALID))
+	fi
+    done
+
+    log debug "KEYS_PROCESSED=$KEYS_PROCESSED"
+    log debug "KEYS_VALID=$KEYS_VALID"
+}
+
+# process an authorized_user_ids file on stdin for authorized_keys
+process_authorized_user_ids() {
+    local authorizedKeys="$1"
+    declare -i nline=0
+    local line
+    declare -a userIDs
+    declare -a koptions
+
+    # extract user IDs from authorized_user_ids file
+    IFS=$'\n'
+    while read line ; do
+	case "$line" in
+	    ("#"*)
+		continue
+		;;
+	    (" "*|$'\t'*)
+		if [[ -z ${koptions[${nline}]} ]]; then
+	            koptions[${nline}]=$(echo $line | sed 's/^[ 	]*//;s/[ 	]$//;')
+		else
+	            koptions[${nline}]="${koptions[${nline}]},$(echo $line | sed 's/^[ 	]*//;s/[ 	]$//;')"
+		fi
+		;;
+            (*)
+		((++nline))
+		userIDs[${nline}]="$line"
+		unset koptions[${nline}] || true
+		;;
+	esac
+    done
+
+    for i in $(seq 1 $nline); do
+	AUTHORIZED_KEYS_OPTIONS="${koptions[$i]}" FILE_TYPE='authorized_keys' process_keys_for_file "$authorizedKeys" "${userIDs[$i]}" || returnCode="$?"
+    done
+}
+
+# takes a gpg key or keys on stdin, and outputs a list of
+# fingerprints, one per line:
+list_primary_fingerprints() {
+    local fake=$(msmktempdir)
+    trap "rm -rf $fake" EXIT
+    GNUPGHOME="$fake" gpg --no-tty --quiet --import --ignore-time-conflict 2>/dev/null
+    GNUPGHOME="$fake" gpg --with-colons --fingerprint --list-keys | \
+	awk -F: '/^fpr:/{ print $10 }'
+    trap - EXIT
+    rm -rf "$fake"
+}
+
+# takes an OpenPGP key or set of keys on stdin, a fingerprint or other
+# key identifier as $1, and outputs the gpg-formatted information for
+# the requested keys from the material on stdin
+get_cert_info() {
+    local fake=$(msmktempdir)
+    trap "rm -rf $fake" EXIT
+    GNUPGHOME="$fake" gpg --no-tty --quiet --import --ignore-time-conflict 2>/dev/null
+    GNUPGHOME="$fake" gpg --with-colons --fingerprint --fixed-list-mode --list-keys "$1"
+    trap - EXIT
+    rm -rf "$fake"
+}
+
+
+check_cruft_file() {
+    local loc="$1"
+    local version="$2"
+    
+    if [ -e "$loc" ] ; then
+	printf "! The file '%s' is no longer used by\n  monkeysphere (as of version %s), and can be removed.\n\n" "$loc" "$version" | log info
+    fi
+}
+
+check_upgrade_dir() {
+    local loc="$1"
+    local version="$2"
+
+    if [ -d "$loc" ] ; then
+	printf "The presence of directory '%s' indicates that you have\nnot yet completed a monkeysphere upgrade.\nYou should probably run the following script:\n  %s/transitions/%s\n\n" "$loc" "$SYSSHAREDIR" "$version" | log info
+    fi
+}
+
+## look for cruft from old versions of the monkeysphere, and notice if
+## upgrades have not been run:
+report_cruft() {
+    check_upgrade_dir "${SYSCONFIGDIR}/gnupg-host" 0.23
+    check_upgrade_dir "${SYSCONFIGDIR}/gnupg-authentication" 0.23
+
+    check_cruft_file "${SYSCONFIGDIR}/gnupg-authentication.conf" 0.23
+    check_cruft_file "${SYSCONFIGDIR}/gnupg-host.conf" 0.23
+
+    local found=
+    for foo in "${SYSDATADIR}/backup-from-"*"-transition"  ; do
+	if [ -d "$foo" ] ; then
+	    printf "! %s\n" "$foo" | log info
+	    found=true
+	fi
+    done
+    if [ "$found" ] ; then
+	printf "The directories above are backups left over from a monkeysphere transition.\nThey may contain copies of sensitive data (host keys, certifier lists), but\nthey are no longer needed by monkeysphere.\nYou may remove them at any time.\n\n" | log info
+    fi
+}

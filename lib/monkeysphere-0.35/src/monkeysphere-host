@@ -1,0 +1,440 @@
+#!/usr/bin/env bash
+
+# monkeysphere-host: Monkeysphere host admin tool
+#
+# The monkeysphere scripts are written by:
+# Jameson Rollins <jrollins@finestructure.net>
+# Jamie McClelland <jm@mayfirst.org>
+# Daniel Kahn Gillmor <dkg@fifthhorseman.net>
+# Micah Anderson <micah@riseup.net>
+#
+# They are Copyright 2008-2010, and are all released under the GPL,
+# version 3 or later.
+
+########################################################################
+set -e
+
+# set the pipefail option so pipelines fail on first command failure
+set -o pipefail
+
+PGRM=$(basename $0)
+
+SYSSHAREDIR=${MONKEYSPHERE_SYSSHAREDIR:-"__SYSSHAREDIR_PREFIX__/share/monkeysphere"}
+export SYSSHAREDIR
+. "${SYSSHAREDIR}/defaultenv"
+. "${SYSSHAREDIR}/common"
+
+# sharedir for host functions
+MHSHAREDIR="${SYSSHAREDIR}/mh"
+
+# datadir for host functions
+MHDATADIR="${SYSDATADIR}/host"
+
+# host pub key files
+HOST_KEY_FILE="${SYSDATADIR}/host_keys.pub.pgp"
+
+# UTC date in ISO 8601 format if needed
+DATE=$(date -u '+%FT%T')
+
+# unset some environment variables that could screw things up
+unset GREP_OPTIONS
+
+########################################################################
+# FUNCTIONS
+########################################################################
+
+usage() {
+    cat <<EOF >&2
+usage: $PGRM <subcommand> [options] [args]
+Monkeysphere host admin tool.
+
+subcommands:
+ import-key (i) FILE SERVICENAME       import PEM-encoded key from file
+ show-keys (s) [KEYID ...]             output host key information
+ publish-keys (p) [KEYID ...]          publish key(s) to keyserver
+ set-expire (e) EXPIRE [KEYID]         set key expiration
+ add-servicename (n+) SERVICENAME [KEYID]
+                                       add a service name to key
+ revoke-servicename (n-) SERVICENAME [KEYID]
+                                       revoke a service name from key
+ add-revoker (r+) REVOKER_KEYID|FILE [KEYID]
+                                       add a revoker to key
+ revoke-key [KEYID]                    generate and/or publish revocation
+                                       certificate for key
+
+ version (v)                           show version number
+ help (h,?)                            this help
+
+See ${PGRM}(8) for more info.
+EOF
+}
+
+# function to interact with the gpg keyring
+gpg_host() {
+    GNUPGHOME="$GNUPGHOME_HOST" LC_ALL=C gpg --no-auto-check-trustdb --trust-model=always --no-greeting --quiet --no-tty --fixed-list-mode "$@"
+}
+
+# list the info about the a key, in colon format, to stdout
+gpg_host_list_keys() {
+    if [ "$1" ] ; then
+	gpg_host --list-keys --with-colons \
+	    --with-fingerprint --with-fingerprint \
+	    "$1"
+    else
+	gpg_host --list-keys --with-colons \
+	    --with-fingerprint --with-fingerprint
+    fi
+}
+
+# edit key scripts, takes scripts on stdin, and keyID as first input
+gpg_host_edit() {
+    gpg_host --command-fd 0 --edit-key "$@"
+}
+
+# export the monkeysphere OpenPGP pub key file
+update_pgp_pub_file() {
+    log debug "updating openpgp public key file '$HOST_KEY_FILE'..."
+    gpg_host --export --armor --export-options export-minimal \
+        $(gpg_host --list-secret-keys --with-colons --fingerprint | grep ^fpr | cut -f10 -d:) \
+        > "$HOST_KEY_FILE"
+}
+
+# check that the service name is well formed. we assume that the
+# service name refers to a host; DNS labels for host names are limited
+# to a very small range of characters (see RFC 1912, section 2.1).
+
+# FIXME: i'm failing to check here for label components that are
+# all-number (e.g. ssh://666.666), which are technically not allowed
+# (though some exist on the 'net, apparently)
+
+# FIXME: this will probably misbehave if raw IP addresses are provided,
+# either IPv4 or IPv6 using the bracket notation.
+
+# FIXME: this doesn't address the use of hashed User IDs.
+
+check_service_name() {
+    local name="$1"
+    local errs=""
+    local scheme
+    local port
+    local assigned_ports
+
+    [ -n "$name" ] || \
+        failure "You must supply a service name to check"
+
+    printf '%s' "$name" | perl -n -e '($str = $_) =~ s/\s//g ; exit !(lc($str) eq $_);' || \
+        failure "Not a valid service name: '$name'
+
+Service names should be canonicalized to all lower-case,
+with no whitespace"
+
+    [[ "$name" =~ ^[a-z0-9./:-]+$ ]] || \
+        failure "Not a valid service name: '$name'
+
+Service names should contain only lower-case ASCII letters
+numbers, dots (.), hyphens (-), slashes (/), and a colon (:).
+If you are using non-ASCII characters (e.g. IDN), you should
+use the canonicalized ASCII (NAMEPREP -> Punycode) representation
+(see RFC 3490)."
+
+    [[ "$name" =~ \. ]] || \
+        failure "Not a valid service name: '$name'
+
+Service names should use fully-qualified domain names (FQDN), but the
+domain name you chose appears to only have the local part.  For
+example: don't use 'ssh://foo' ; use 'ssh://foo.example.com' instead."
+
+    [[ "$name" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.|((\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+))(:[1-9][0-9]{0,4})?$ ]] || \
+        failure "Not a valid service name: '$name'
+
+Service names look like <scheme>://full.example.com[:<portnumber>],
+where <scheme> is something like ssh or https, and <portnumber> is
+a decimal number (supplied only if the service is on a non-standard
+port)."
+    
+    scheme=$(cut -f1 -d: <<<"$name")
+    port=$(cut -f3 -d: <<<"$name")
+    
+    # check that the scheme name is found in the system services
+    # database
+    available_=$(get_port_for_service "$scheme") || \
+        log error "Error looking up service scheme named '%s'" "$scheme"
+
+    # FIXME: if the service isn't found, or does not have a port, what
+    # should we do? at the moment, we're just warning.
+    
+    if [ -n "$port" ]; then
+    # check that the port number is a legitimate port number (> 0, < 65536)
+        [ "$port" -gt 0 ] && [ "$port" -lt 65536 ] || \
+            failure "The given port number should be greater than 0 and
+less than 65536.  '$port' is not OK"
+
+    # if the port number is given, and the scheme is in the services
+    # database, check that the port number does *not* match the
+    # default port.
+        if (printf '%s' "$assigned_ports" | grep -q -F -x "$port" ) ; then
+            failure $(printf "The scheme %s uses port number %d by default.
+You should leave off the port number if it is the default" "$scheme" "$port")
+        fi
+    fi
+
+}
+
+# fail if host key not present
+check_no_keys() {
+    [ -s "$HOST_KEY_FILE" ] \
+	|| failure "You don't appear to have a Monkeysphere host key on this server.
+Please run 'monkeysphere-host import-key' import a key."
+}
+
+# key input to functions, outputs full fingerprint of specified key if
+# found
+check_key_input() {
+    local keyID="$1"
+    # array of fingerprints
+    local fprs=($(list_primary_fingerprints <"$HOST_KEY_FILE"))
+
+    case ${#fprs[@]} in
+	0)
+	    failure "You don't appear to have any Monkeysphere host keys.
+Please run 'monkeysphere-host import-key' to import a key."
+	    ;;
+	1)
+	    :
+	    ;;
+	*)
+	    if [ -z "$keyID" ] ; then
+		failure "Your host keyring contains multiple keys.
+Please specify one to act on (see 'monkeysphere-host show-keys')."
+	    fi
+	    ;;
+    esac
+    printf '%s\n' "${fprs[@]}" | grep "${keyID}$" \
+	|| failure "Host key '$keyID' not found."
+}
+
+# return 0 if user ID was found.
+# return 1 if user ID not found.
+check_key_userid() {
+    local keyID="$1"
+    local userID="$2"
+    local tmpuidMatch
+
+    # match to only "unknown" user IDs (host has no need for ultimate trust)
+    tmpuidMatch="uid:-:$(echo $userID | gpg_escape)"
+
+    # See whether the requsted user ID is present
+    gpg_host_list_keys "$keyID" | cut -f1,2,10 -d: | \
+	grep -q -x -F "$tmpuidMatch" 2>/dev/null
+}
+
+prompt_userid_exists() {
+    local userID="$1"
+    local gpgOut
+    local fingerprint
+
+    if gpgOut=$(gpg_host_list_keys "=${userID}" 2>/dev/null) ; then
+	fingerprint=$(echo "$gpgOut" | grep '^fpr:' | cut -d: -f10)
+	if [ "$PROMPT" != "false" ] ; then
+	    printf "Service name '%s' is already being used by key '%s'.\nAre you sure you want to use it again? (y/N) " "$userID" "$fingerprint" >&2
+	    read OK; OK=${OK:=N}
+	    if [ "${OK/y/Y}" != 'Y' ] ; then
+		failure "Service name not added."
+	    fi
+	else
+	    log info "Key '%s' is already using the service name '%s'." "$fingerprint" "$userID" >&2
+	fi
+    fi
+}
+
+# run command looped over keys
+multi_key() {
+    local cmd="$1"
+    shift
+    local keys=$@
+    local i=0
+    local key
+
+    check_no_keys
+
+    log debug "listing primary fingerprints from $HOST_KEY_FILE"
+    local fprs=($(list_primary_fingerprints <"$HOST_KEY_FILE"))
+    log debug "obtained the following fingerprints: $fprs"
+
+    if [[ -z "$1" || "$1" == '--all' ]] ; then
+	log debug "publishing all keys"
+	keys="${fprs[@]}"
+    fi
+
+    log debug "using keys: $keys"
+
+    for key in $keys ; do
+	if (( i++ > 0 )) ; then
+	    printf "\n"
+	fi
+	log debug "invoking $cmd $key"
+	"$cmd" "$key"
+    done
+}
+
+# show info about the a key
+show_key() {
+    local id="$1"
+    local GNUPGHOME
+    local fingerprint
+    local revokers
+
+    # tmp gpghome dir
+    export GNUPGHOME=$(msmktempdir)
+
+    # trap to remove tmp dir if break
+    trap "rm -rf $GNUPGHOME" EXIT
+
+    # import the host key into the tmp dir
+    gpg --quiet --import <"$HOST_KEY_FILE"
+
+    # get the gpg fingerprint
+    if gpg --quiet --list-keys \
+	--with-colons --with-fingerprint "$id" \
+	| grep '^fpr:' | cut -d: -f10 > "$GNUPGHOME"/fingerprint ; then
+	fingerprint=$(cat "$GNUPGHOME"/fingerprint)
+    else
+	failure "ID '$id' not found."
+    fi
+
+    # list the host key info
+    # FIXME: make no-show-keyring work so we don't have to do the grep'ing
+    # FIXME: can we show uid validity somehow?
+    gpg --list-keys --list-options show-unusable-uids "$fingerprint" 2>/dev/null \
+        | grep -v "^${GNUPGHOME}/pubring.gpg$" \
+        | egrep -v '^-+$' \
+        | grep -v '^$'
+
+    # list revokers, if there are any
+    revokers=$(gpg --list-keys --with-colons --fixed-list-mode "$fingerprint" \
+	| awk -F: '/^rvk:/{ print $10 }' )
+    if [ "$revokers" ] ; then
+	echo "The following keys are allowed to revoke this host key:"
+	for key in $revokers ; do
+	    echo "revoker: $key"
+	done
+    fi
+
+    # list the pgp fingerprint
+    echo "OpenPGP fingerprint: $fingerprint"
+
+    # list the ssh fingerprint
+    printf "ssh fingerprint: %s\n" \
+    "$(gpg --export --no-armor "$fingerprint" 2>/dev/null | "$SYSSHAREDIR/keytrans" openpgp2sshfpr "$fingerprint")"
+
+    # remove the tmp file
+    trap - EXIT
+    rm -rf "$GNUPGHOME"
+}
+
+########################################################################
+# MAIN
+########################################################################
+
+# load configuration file
+[ -e ${MONKEYSPHERE_HOST_CONFIG:="${SYSCONFIGDIR}/monkeysphere-host.conf"} ] \
+    && . "$MONKEYSPHERE_HOST_CONFIG"
+
+# set empty config variable with ones from the environment, or with
+# defaults
+LOG_LEVEL=${MONKEYSPHERE_LOG_LEVEL:=$LOG_LEVEL}
+KEYSERVER=${MONKEYSPHERE_KEYSERVER:=$KEYSERVER}
+log debug "using keyserver: $KEYSERVER"
+CHECK_KEYSERVER=${MONKEYSPHERE_CHECK_KEYSERVER:=$CHECK_KEYSERVER}
+MONKEYSPHERE_USER=${MONKEYSPHERE_MONKEYSPHERE_USER:=$MONKEYSPHERE_USER}
+MONKEYSPHERE_GROUP=$(get_primary_group "$MONKEYSPHERE_USER")
+PROMPT=${MONKEYSPHERE_PROMPT:=$PROMPT}
+
+# other variables
+GNUPGHOME_HOST=${MONKEYSPHERE_GNUPGHOME_HOST:="${MHDATADIR}"}
+LOG_PREFIX=${MONKEYSPHERE_LOG_PREFIX:='ms: '}
+
+# export variables needed in su invocation
+export DATE
+export LOG_LEVEL
+export KEYSERVER
+export CHECK_KEYSERVER
+export MONKEYSPHERE_USER
+export MONKEYSPHERE_GROUP
+export PROMPT
+export GNUPGHOME_HOST
+export GNUPGHOME
+export HOST_FINGERPRINT
+export LOG_PREFIX
+
+if [ "$#" -eq 0 ] ; then 
+    usage
+    failure "Please supply a subcommand."
+fi
+
+# get subcommand
+COMMAND="$1"
+shift
+
+case $COMMAND in
+    'import-key'|'import'|'i')
+	source "${MHSHAREDIR}/import_key"
+	import_key "$@"
+	;;
+
+    'show-keys'|'show-key'|'show'|'s')
+	multi_key show_key "$@"
+	;;
+
+    'set-expire'|'extend-key'|'extend'|'e')
+	source "${MHSHAREDIR}/set_expire"
+	set_expire "$@"
+	;;
+
+    'add-servicename'|'add-hostname'|'add-name'|'n+')
+	source "${MHSHAREDIR}/add_name"
+	add_name "$@"
+	;;
+
+    'revoke-servicename'|'revoke-hostname'|'revoke-name'|'n-')
+	source "${MHSHAREDIR}/revoke_name"
+	revoke_name "$@"
+	;;
+
+    'add-revoker'|'r+')
+	source "${MHSHAREDIR}/add_revoker"
+	add_revoker "$@"
+	;;
+
+    'revoke-key')
+	source "${MHSHAREDIR}/revoke_key"
+	revoke_key "$@"
+	;;
+
+    'publish-keys'|'publish-key'|'publish'|'p')
+	source "${MHSHAREDIR}/publish_key"
+	multi_key publish_key "$@"
+	;;
+
+    'diagnostics'|'d')
+	source "${MHSHAREDIR}/diagnostics"
+	diagnostics
+	;;
+
+    'update-pgp-pub-file')
+	update_pgp_pub_file
+	;;
+
+    'version'|'--version'|'v')
+	version
+	;;
+
+    '--help'|'help'|'-h'|'h'|'?')
+        usage
+        ;;
+
+    *)
+        failure "Unknown command: '$COMMAND'
+Try '$PGRM help' for usage."
+        ;;
+esac

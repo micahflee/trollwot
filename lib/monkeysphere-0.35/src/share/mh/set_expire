@@ -1,0 +1,78 @@
+# -*-shell-script-*-
+# This should be sourced by bash (though we welcome changes to make it POSIX sh compliant)
+
+# Monkeysphere host set-expire subcommand
+#
+# This is a function to set the expiration date of the monkeysphere
+# host key.
+#
+# The monkeysphere scripts are written by:
+# Jameson Rollins <jrollins@finestructure.net>
+# Jamie McClelland <jm@mayfirst.org>
+# Daniel Kahn Gillmor <dkg@fifthhorseman.net>
+#
+# They are Copyright 2008-2010, and are all released under the GPL,
+# version 3 or later.
+
+set_expire() {
+
+local extendBy
+local keyID
+
+local formatMsg='
+The possibilities are:
+    0 = key does not expire
+ <n>  = key expires in n days
+ <n>w = key expires in n weeks
+ <n>m = key expires in n months
+ <n>y = key expires in n years'
+
+
+if [ -z "$1" ] ; then
+    failure "Must specify expiration.$formatMsg"
+fi
+extendBy="$1"
+shift
+
+if ! <<<"$extendBy" egrep -q '^[[:digit:]]+[wmy]?$' ; then
+    failure "'$extendBy' is not a valid expiration date.$formatMsg"
+fi
+
+keyID=$(check_key_input "$@")
+
+if [ "$PROMPT" != "false" ] ; then
+    printf "Are you sure you want to change the expiration on key '$keyID' by '%s'? (Y/n) " "$extendBy" >&2
+    read OK; OK=${OK:-Y}
+    if [ "${OK/y/Y}" != 'Y' ] ; then
+	failure "expiration not set."
+    fi
+else
+    log debug "extending without prompting."
+fi
+
+log info "setting key expiration to ${extendBy}."
+
+log debug "executing key expire script..."
+gpg_host_edit "0x${keyID}!" expire <<EOF
+$extendBy
+save
+EOF
+
+update_pgp_pub_file
+
+if [ 0 == "$extendBy" ] ; then 
+    log info "Key ${keyID} no longer expires."
+else
+    if expiry=$(gpg_host_list_keys "${keyID}" | grep ^pub: | head -n1 | cut -f7 -d: ) ; then
+        log info "Key ${keyID} now expires at $(date '+%F %T' --date "1970-01-01 0:00 UTC + ${expiry} seconds")"
+    else
+        log error "Failed to retrieve new expiration date for key ${keyID}"
+    fi
+fi
+
+log info <<EOF
+NOTE: Key expiration date adjusted, but not yet published.
+Run '$PGRM publish-key' to publish the new expiration date.
+EOF
+
+}

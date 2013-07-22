@@ -1,0 +1,128 @@
+# -*-shell-script-*-
+# This should be sourced by bash (though we welcome changes to make it POSIX sh compliant)
+
+# Monkeysphere subkey-to-ssh-agent subcommand
+#
+# The monkeysphere scripts are written by:
+# Jameson Rollins <jrollins@finestructure.net>
+# Jamie McClelland <jm@mayfirst.org>
+# Daniel Kahn Gillmor <dkg@fifthhorseman.net>
+#
+# They are Copyright 2008-2009, and are all released under the GPL,
+# version 3 or later.
+
+# try to add all authentication subkeys to the agent
+
+# FIXME: what if you only want to add one authentication subkey to the
+# agent?
+
+subkey_to_ssh_agent() {
+    local sshaddresponse=0
+    local secretkeys
+    local authsubkeys
+    local workingdir
+    local keysuccess=0
+    local subkey
+    local publine
+    local kname
+
+    # if there's no agent running, don't bother:
+    if [ -z "$SSH_AUTH_SOCK" ] || ! type ssh-add >/dev/null ; then
+	failure "No ssh-agent available."
+    fi
+
+    # and if it looks like it's running, but we can't actually talk to
+    # it, bail out:
+    ssh-add -l >/dev/null || sshaddresponse="$?"
+    if [ "$sshaddresponse" = "2" ]; then
+	failure "Could not connect to ssh-agent"
+    fi
+
+    # if the MONKEYSPHERE_SUBKEYS_FOR_AGENT variable is set, use the
+    # keys specified there
+    if [ "$MONKEYSPHERE_SUBKEYS_FOR_AGENT" ] ; then
+	authsubkeys="$MONKEYSPHERE_SUBKEYS_FOR_AGENT"
+
+    # otherwise find all authentication-capable subkeys and use those
+    else
+	# get list of secret keys
+	# (to work around bug https://bugs.g10code.com/gnupg/issue945):
+	secretkeys=$(gpg_user --list-secret-keys --with-colons \
+	    --fingerprint | \
+	    grep '^fpr:' | cut -f10 -d: | awk '{ print "0x" $1 "!" }')
+
+	if [ -z "$secretkeys" ]; then
+	    failure "You have no secret keys in your keyring!
+You might want to run 'gpg --gen-key'."
+	fi
+    
+	authsubkeys=$(gpg_user --list-secret-keys --with-colons \
+	    --fingerprint --fingerprint $secretkeys | \
+	    cut -f1,5,10,12 -d: | grep -A1 '^ssb:[^:]*::[^:]*a[^:]*$' | \
+	    grep '^fpr::' | cut -f3 -d: | sort -u)
+
+	if [ -z "$authsubkeys" ]; then
+	    failure "no authentication-capable subkeys available.
+You might want to run 'monkeysphere gen-subkey'."
+	fi
+    fi
+
+    workingdir=$(msmktempdir)
+    trap "rm -rf $workingdir" EXIT
+    umask 077
+    mkfifo "$workingdir/passphrase"
+
+    # FIXME: we're currently allowing any other options to get passed
+    # through to ssh-add.  should we limit it to known ones?  For
+    # example: -d or -c and/or -t <lifetime> 
+
+    for subkey in $authsubkeys; do
+	# test that the subkey has proper capability
+	capability=$(gpg_user --list-secret-keys --with-colons \
+	    --fingerprint --fingerprint "0x${subkey}!" \
+	    | egrep -B 1 "^fpr:::::::::${subkey}:$" | grep "^ssb:" | cut -d: -f12)
+	if ! check_capability "$capability" 'a' ; then
+	    log error "Did not find authentication-capable subkey with key ID '$subkey'."
+	    continue
+	fi
+
+	# choose a label by which this key will be known in the agent:
+	# we are labelling the key by User ID instead of by
+	# fingerprint, but filtering out all / characters to make sure
+	# the filename is legit.
+
+        # FIXME: this assumes that the first listed uid is the primary
+        # UID.  does gpg guarantee that?  is there some better way to
+        # get this info?
+	primaryuid=$(gpg_user --with-colons --list-key "0x${subkey}!" | grep '^uid:' | head -n1 | cut -f10 -d: | tr -d /)
+
+	#kname="[monkeysphere] $primaryuid"
+	kname="${primaryuid:-Monkeysphere Key 0x${subkey}}"
+
+	if [ "$1" = '-d' ]; then
+	    # we're removing the subkey:
+	    gpg_user --export --no-armor "0x${subkey}!" | openpgp2ssh "$subkey" > "$workingdir/$kname"
+	    (cd "$workingdir" && ssh-add -d "$kname") || keysuccess="$?"
+	else
+	    # we're adding the subkey:
+	    mkfifo "$workingdir/$kname"
+	    gpg_user --passphrase-fd 3 3<"$workingdir/passphrase" \
+		--export-options export-reset-subkey-passwd,export-minimal,no-export-attributes \
+		--export-secret-subkeys --no-armor "0x${subkey}!" | openpgp2ssh "$subkey" > "$workingdir/$kname" &
+	    (cd "$workingdir" && DISPLAY=nosuchdisplay SSH_ASKPASS=/bin/false ssh-add "$@" "$kname" </dev/null )&
+
+	    passphrase_prompt "Enter passphrase for key $kname: " "$workingdir/passphrase"
+	    wait %2 || keysuccess="$?"
+	fi
+
+	rm -f "$workingdir/$kname"
+    done
+
+    trap - EXIT
+    rm -rf "$workingdir"
+
+    # FIXME: sort out the return values: we're just returning the
+    # failure code of the last authentication subkey which fails.
+    # what if more than one authentication subkey fails?
+    return "$keysuccess"
+}

@@ -1,0 +1,52 @@
+# -*-shell-script-*-
+# This should be sourced by bash (though we welcome changes to make it POSIX sh compliant)
+
+# Monkeysphere authentication remove-certifier subcommand
+#
+# The monkeysphere scripts are written by:
+# Jameson Rollins <jrollins@finestructure.net>
+# Jamie McClelland <jm@mayfirst.org>
+# Daniel Kahn Gillmor <dkg@fifthhorseman.net>
+#
+# They are Copyright 2008-2009, and are all released under the GPL,
+# version 3 or later.
+
+# delete a certifiers key from the host keyring
+
+remove_certifier() {
+
+local keyID
+local fingerprint
+
+keyID="$1"
+if [ -z "$keyID" ] ; then
+    failure "You must specify the key ID of a key to remove."
+fi
+
+# FIXME: should we be doing a fancier list_certifier output here?
+gpg_core --list-key --fingerprint "0x${keyID}!" || failure
+
+if [ "$PROMPT" != "false" ] ; then
+    printf "Really remove the above listed identity certifier? (Y/n) " >&2 
+    read OK; OK=${OK:-Y}
+    if [ "${OK/y/Y}" != 'Y' ] ; then
+	failure "Identity certifier not removed."
+    fi
+else
+    log debug "certifier removed without prompting."
+fi
+
+# delete the requested key from the sphere keyring
+if gpg_sphere --delete-key --batch --yes "0x${keyID}!" ; then
+    # delete key from core keyring as well
+    gpg_core --delete-key --batch --yes "0x${keyID}!"
+
+    # update the trustdb for the authentication keyring
+    gpg_sphere --check-trustdb
+
+    log info "Identity certifier removed."
+else
+    failure "Problem removing identity certifier."
+fi
+
+}

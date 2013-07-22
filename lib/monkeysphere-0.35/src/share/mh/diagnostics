@@ -1,0 +1,157 @@
+# -*-shell-script-*-
+# This should be sourced by bash (though we welcome changes to make it POSIX sh compliant)
+
+# Monkeysphere host diagnostics subcommand
+#
+# The monkeysphere scripts are written by:
+# Jameson Rollins <jrollins@finestructure.net>
+# Jamie McClelland <jm@mayfirst.org>
+# Daniel Kahn Gillmor <dkg@fifthhorseman.net>
+#
+# They are Copyright 2008-2010, and are all released under the GPL,
+# version 3 or later.
+
+# check on the status and validity of the host's public certificates (and keys?)
+
+# global vars for communicating between functions:
+
+MHD_CURDATE=$(date +%s)
+# warn when anything is 2 months away from expiration
+MHD_WARNWINDOW='2 months'
+MHD_WARNDATE=$(advance_date $MHD_WARNWINDOW +%s)
+MHD_PROBLEMSFOUND=0
+
+
+diagnose_key() {
+    local fpr="$1"
+    local certinfo
+    local create
+    local expire
+    local uid
+    local keysfound
+    local uiderrs
+    local errcount
+
+    printf "Checking OpenPGP Certificate for key 0x%s\n" "$fpr"
+
+    certinfo=$(get_cert_info "0x$fpr" <"$HOST_KEY_FILE")
+    keysfound=$(grep -c ^pub: <<<"$certinfo")
+
+    if [ "$keysfound" -lt 1 ] ; then
+        printf "! Could not find key with fingerprint 0x%s\n" "$fpr"
+        # FIXME: recommend a way to resolve this!
+	MHD_PROBLEMSFOUND=$(($MHD_PROBLEMSFOUND+1))
+    fi
+
+    create=$(echo "$certinfo" | grep ^pub: | cut -f6 -d:)
+    expire=$(echo "$certinfo" | grep ^pub: | cut -f7 -d:)
+    # check for key expiration:
+    if [ "$expire" ]; then
+	if (( "$expire"  < "$MHD_CURDATE" )); then
+	    printf "! Host key 0x%s is expired.\n" "$fpr"
+	    printf " - Recommendation: extend lifetime of key with 'monkeysphere-host set-expire 0x%s'\n" "$fpr"
+	    MHD_PROBLEMSFOUND=$(($MHD_PROBLEMSFOUND+1))
+	elif (( "$expire" < "$MHD_WARNDATE" )); then
+	    printf "! Host key 0x%s expires in less than %s: %s\n" "$fpr" "$MHD_WARNWINDOW" $(advance_date $(( $expire - $MHD_CURDATE )) seconds +%F)
+	    printf " - Recommendation: extend lifetime of key with 'monkeysphere-host set-expire %s'\n" "$fpr"
+	    MHD_PROBLEMSFOUND=$(($MHD_PROBLEMSFOUND+1))
+	fi
+    fi
+
+    # and weirdnesses:
+    if [ "$create" ] && (( "$create" > "$MHD_CURDATE" )); then
+	printf "! Host key 0x%s was created in the future(?!): %s. Is your clock correct?\n" "$fpr" $(date -d "1970-01-01 + $create seconds" +%F)
+	printf " - Recommendation: Check your clock (is it really %s?); use NTP?\n" $(date +%F_%T)
+	MHD_PROBLEMSFOUND=$(($MHD_PROBLEMSFOUND+1))
+    fi
+    
+    # check for UserID expiration:
+    uiderrs=$(printf '%s\n' "$certinfo" | grep ^uid: | cut -d: -f6,7,10 | \
+        while IFS=: read -r create expire uid ; do
+            uid=$(gpg_unescape <<<"$uid")
+            
+            check_service_name "$uid"
+	    if [ "$create" ] && (( "$create" > "$MHD_CURDATE" )); then
+	        printf "! The latest self-sig on User ID '%s' was created in the future(?!): %s.\n - Is your clock correct?\n" "$uid" $(date -d "1970-01-01 + $create seconds" +%F)
+	        printf " - Recommendation: Check your clock (is it really %s ?); use NTP?\n" $(date +%F_%T)
+	    fi
+	    if [ "$expire" ] ; then
+	        if (( "$expire" < "$MHD_CURDATE" )); then
+		    printf "! User ID '%s' is expired.\n" "$uid"
+		# FIXME: recommend a way to resolve this
+	        elif (( "$expire" < "$MHD_WARNDATE" )); then
+		    printf "! User ID '%s' expires in less than %s: %s\n"  "%s" "$MHD_WARNWINDOW" $(advance_date $(( $expire - $MHD_CURDATE )) seconds +%F)
+		# FIXME: recommend a way to resolve this
+	        fi
+	    fi
+        done)
+    errcount=$(grep -c '^!' <<<"$uiderrs") || \
+        MHD_PROBLEMSFOUND=$(($MHD_PROBLEMSFOUND+ $errcount ))
+    printf '%s\n' "$uiderrs"
+
+
+	    
+# FIXME: verify that the host key is properly published to the
+#   keyservers (do this with the non-privileged user)
+
+# FIXME: check that there are valid, non-expired certifying signatures
+#   attached to the host key after fetching from the public keyserver
+#   (do this with the non-privileged user as well)
+
+# FIXME: propose adding a revoker to the host key if none exist (do we
+#   have a way to do that after key generation?)
+
+# FIXME: test (with ssh-keyscan?) that any running ssh daemon is
+# actually offering the monkeysphere host key, if such a key is
+# loaded.
+
+# FIXME: scan /proc/net/tcp and /proc/net/tcp6 to see what
+#   known-crypto ports (ssh, https, imaps?, ldaps?, etc) are in use
+#   locally.  Propose bringing them into the monkeysphere.
+
+# FIXME: ensure that the key is of a reasonable size
+
+# FIXME: ensure that the cert has the right key usage flags
+
+# FIXME: ensure that the key doesn't match any known blacklist
+}
+
+diagnostics() {
+
+MHD_PROBLEMSFOUND=0
+
+
+if ! [ -d "$SYSDATADIR" ] ; then
+    echo "! no $SYSDATADIR directory found.  Please create it."
+    exit
+fi
+
+if ! [ -f "$HOST_KEY_FILE" ] ; then
+    echo "No host OpenPGP certificates file found!"
+    echo " - Recommendation: run 'monkeysphere-host import-key' with a service key"
+    exit
+fi
+
+if ! id monkeysphere >/dev/null ; then
+    echo "! No monkeysphere user found!  Please create a monkeysphere system user with bash as its shell."
+    MHD_PROBLEMSFOUND=$(($MHD_PROBLEMSFOUND+1))
+fi
+
+echo "Checking host OpenPGP certificates..."
+multi_key diagnose_key
+
+# FIXME: look at the ownership/privileges of the various keyrings,
+#    directories housing them, etc (what should those values be?  can
+#    we make them as minimal as possible?)
+
+# report on any cruft from old monkeysphere version
+report_cruft
+
+if [ "$MHD_PROBLEMSFOUND" -gt 0 ]; then
+    echo "When the above $MHD_PROBLEMSFOUND issue"$(if [ "$MHD_PROBLEMSFOUND" -eq 1 ] ; then echo " is" ; else echo "s are" ; fi)" resolved, please re-run:"
+    echo "  monkeysphere-host diagnostics"
+else
+    echo "Everything seems to be in order!"
+fi
+
+}

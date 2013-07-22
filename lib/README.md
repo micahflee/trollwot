@@ -12,3 +12,10 @@ python-gnupg-0.3.3
 ==================
 
 This is the original unmodified python-gnupg 0.3.3.
+
+
+monkeysphere-0.35
+=================
+
+A copy of monkeysphere from the debian wheezy source repo. I'm using it specifically for it's keytrans tool.
+
