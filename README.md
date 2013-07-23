@@ -23,13 +23,13 @@ Build the modified gnupg.
 ASCII sign a PGP key
 --------------------
 
-ascii_sign.py is a script that takes a filename and a target key id as input. It downloads the target key, then generates a new PGP for each line in the file. It signs the target key with the new keys and pushes everything to the pgp.mit.edu key server. Essentially, it lets you sign any key with ASCII art.
+ascii_sign is a script that takes a filename and a target key id as input. It downloads the target key, then generates a new PGP for each line in the file. It signs the target key with the new keys and pushes everything to the pgp.mit.edu key server. Essentially, it lets you sign any key with ASCII art.
 
 For example, check out my key: http://pool.sks-keyservers.net:11371/pks/lookup?op=vindex&search=0x5C17616361BD9F92422AC08BB4D25A1E99999697
 
 ASCII sign a key like this:
 
-    ./ascii_sign.py [ASCII_ART_FILENAME] [KEYID]
+    ./ascii_sign [ASCII_ART_FILENAME] [KEYID]
 
 If you're ASCII signing a key with multiple user IDs, you'll have to press "y" to verify you want to sign all user IDs for each line.
 
@@ -40,12 +40,12 @@ fake_sign.py is a script that takes a name, email address, and target key id as 
 
 For example, if you want Barack Obama to sign your key, it's easy:
 
-    ./fake_sign.py "Barack Obama" "barack@whitehouse.gov" [KEYID]
+    ./fake_sign [NAME] [EMAIL] [KEYID]
 
 Brute force PGP key ID (slow)
 -----------------------------
 
 brute_force_keyid.py brute forces key IDs by generating an RSA key (using ssh-keygen) and uses the script keytrans to turn it into a PGP key, but changing the timestamp. To run it on your computer, making it a very high priority process:
 
-    nice -20 ./bruteforce_keyid.py 00EFFEFF "Trolling the Web of Trust"
+    nice -20 ./bruteforce_keyid [KEYID] [USERID]
 
