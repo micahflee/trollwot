@@ -10,6 +10,10 @@ To get started, clone the repo and submodules:
     git submodule init
     git submodule update
 
+Install some dependencides. On a Debian-based distro you do this:
+
+    sudo apt-get install python-psutil
+
 Install the gnupg build dependencies. On a Debian-based distro you do this:
 
     sudo apt-get build-dep gnupg
