@@ -15,7 +15,7 @@ Right now this script is in a semi-broken state, but I decided to leave it
 here anyway.
 """
 
-import sys, time
+import sys, time, subprocess
 cwd = sys.path[0]
 
 sys.path.append(cwd+'/lib/python-gnupg')
@@ -26,47 +26,51 @@ class TrollWoT_DownloadWoT:
         self.gpg = gpg
         self.keyserver = keyserver
 
-        self.imported_long_key_ids = []
+        self.imported_keyids = []
 
-        keys = gpg.list_keys()
+        keys = self.gpg.list_keys()
         fingerprints = []
         for key in keys:
             fingerprints.append(key['fingerprint'])
-        self.add_key_ids(fingerprints)
-        print 'already have {0} keys in keyring'.format(len(self.imported_long_key_ids))
+        self.add_keyids(fingerprints)
+        print 'already have {0} keys in keyring'.format(len(self.imported_keyids))
         
-    def download(self, fingerprints):
-        sig_fingerprints = []
+    def download(self, keyids):
+        keyids_to_recv = []
+        for keyid in keyids:
+            if keyid not in self.imported_keyids:
+                keyids_to_recv.append(keyid)
 
-        i = 0
+        print '* downloading {0} keyids: {1}'.format(len(keyids_to_recv), keyids_to_recv)
+        res = self.gpg.recv_keys(self.keyserver, ''.join(keyids_to_recv))
+        self.add_keyids(res.fingerprints)
+
+        sig_keyids = self.list_sigs(res.fingerprints)
+        if len(sig_keyids) > 0:
+            self.download(sig_keyids)
+
+    def add_keyids(self, fingerprints):
         for fp in fingerprints:
-            if fp not in self.imported_long_key_ids:
-                print '{0}: downloading key {1}'.format(i, fp)
-                res = self.gpg.recv_keys(self.keyserver, fp)
-                self.add_key_ids(res.fingerprints)
-            else:
-                print '{0}: already have {1}'.format(i, fp)
+            keyid = fp[-16:]
+            if keyid not in self.imported_keyids:
+                self.imported_keyids.append(keyid)
 
-            sigs = gpg.list_sigs(fp[-8:])
-            sig_fingerprints += sigs
-
-            i += 1
-
-        sig_fingerprints_to_import = []
-        for fp in sig_fingerprints:
-            if fp not in self.imported_long_key_ids:
-                sig_fingerprints_to_import.append(fp)
-
-        if len(sig_fingerprints_to_import) > 0:
-            print 'downloading {0} more fingerprints'.format(len(sig_fingerprints_to_import))
-            self.download(sig_fingerprints_to_import)
-
-    def add_key_ids(self, fingerprints):
+    def list_sigs(self, fingerprints):
+        keyids = []
         for fp in fingerprints:
-            long_key_id = fp[-16:]
-            if long_key_id not in self.imported_long_key_ids:
-                self.imported_long_key_ids.append(long_key_id)
+            keyids.append(fp[-16:])
+        keyids = ' '.join(keyids)
 
+        sig_keyids = []
+        gpg_output = subprocess.check_output('gpg --homedir {0} --with-colons --fixed-list-mode --list-sigs {1}'.format(self.gpg.homedir, keyids), shell=True)
+        for line in gpg_output.split('\n'):
+            if line[0:4] == 'sig:':
+                parts = line.split(':')
+                keyid = parts[4]
+                userid = parts[8]
+                if userid != '[User ID not found]':
+                    sig_keyids.append(keyid)
+        return sig_keyids
         
 if __name__ == '__main__':
     start_time = time.time()
@@ -79,5 +83,5 @@ if __name__ == '__main__':
 
     end_time = time.time()
     time_diff = int(end_time - start_time)
-    print '{0} keys imported, took {1} seconds'.format(len(download_wot.imported_long_key_ids), time_diff)
+    print '{0} keys imported, took {1} seconds'.format(len(download_wot.imported_keyids), time_diff)
 
