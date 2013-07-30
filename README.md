@@ -12,7 +12,7 @@ To get started, clone the repo and submodules:
 
 Install some dependencides. On a Debian-based distro you do this:
 
-    sudo apt-get install python-psutil
+    sudo apt-get install python-psutil monkeysphere
 
 Install the gnupg build dependencies. On a Debian-based distro you do this:
 
