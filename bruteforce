@@ -1,4 +1,4 @@
-#!/usr/bin/perl -T
+#!/usr/bin/perl
 
 # This is a modified version of keytrans. I'm using it specifically
 # to brute force specific OpenPGP key IDs.
@@ -1133,6 +1133,7 @@ for (basename($0)) {
   elsif (/^bruteforce$/) {
     my $openpgp_key;
     my $keyid;
+    my $fingerprint;
     my $rsa;
     my $ts;
     my $tries = 0;
@@ -1145,7 +1146,12 @@ for (basename($0)) {
 
     my $gpg_homedir = shift;
     defined($gpg_homedir) or die "You must specify a GPG homedir.\n";
-    my $tmp_filename = "$gpg_homedir/tmp.bruteforce.gpg";
+        
+    # I'm new to perl and am on an airplane headed to ohm2013 so I don't have internet access 
+    # to look stuff up, so I'm using the filesystem way more than I really need to.
+    my $filename_key = "$gpg_homedir/tmp.bruteforce.gpg";
+    my $filename_status = "$gpg_homedir/tmp.bruteforce.status";
+    my $filename_log = "$gpg_homedir/tmp.bruteforce.log";
 
     # timestamp starts with now
     my $ts_now = time();
@@ -1153,7 +1159,7 @@ for (basename($0)) {
 
     while (1) {
       # generate a new RSA key
-      printf(STDOUT "Generating new RSA key\n");
+      printf("Generating new RSA key\n");
       $rsa = Crypt::OpenSSL::RSA->generate_key(4096);
 
       $ts = $ts_now;
@@ -1164,27 +1170,36 @@ for (basename($0)) {
           make_packet($packet_types->{uid}, $uid).
           makeselfsig( $rsa, $uid, { sig_timestamp => $ts, key_timestamp => $ts });
 
-        # I'm new to perl and am on an airplane headed to ohm2013 so I don't have internet access.
-        # so I'm outputting the key to a file when piping directly into gpg would be faster.
-        print "$tmp_filename\n";
-        open(FILE, ">$tmp_filename");
+        open(FILE, ">$filename_key");
         print FILE $openpgp_key;
         close(FILE);
 
         # call out to gnupg to import this key
-        my $gpg_output = `gpg --homedir $gpg_homedir --import $tmp_filename`;
-        die( $gpg_output);
+        #system("gpg", "--homedir", $gpg_homedir, "--no-tty", "--status-file", $filename_status, "--logger-file", $filename_log, "--import", $filename_key);
+        system("gpg", "--homedir", $gpg_homedir, "--logger-file", $filename_log, "--import", $filename_key);
 
-        if ($target_keyid == $keyid) {
-          # todo: write $openpgp_key to $keyid.gpg
+        # figure out the keyid that was just generated
+        $keyid = '';
+        open(FILE, "<$filename_log");
+        while(<FILE>) {
+          my $line = $_;
+          if (index($line, "secret key imported") != -1) {
+            $keyid = substr($line, 9, 8);
+          }
+        }
 
-          unlink($tmp_filename);
-          die("\nFound a collision! Saved to disk.\n");
+        if ($target_keyid eq $keyid) {
+          # write $openpgp_key to $keyid.gpg
+          open(FILE, ">$keyid.gpg");
+          print FILE $openpgp_key;
+          close(FILE);
+
+          unlink($filename_key);
+          unlink($filename_status);
+          die("\nFound a collision! Saved to $keyid.gpg.\n");
         }
 
         $tries++;
-        printf(STDOUT "\r%i tries", $tries);
-
         $ts--;
       }
     }
