@@ -25,18 +25,6 @@ class TrollWoT_ASCIISign:
         # show fingerprints with gpg
         subprocess.Popen(['gpg', '--homedir', self.gpg.gnupghome, '--list-sigs', self.target_keyid]).wait()
 
-        # prompt for uploading to key server
-        upload_keys = ''
-        while upload_keys != 'YES' and upload_keys != 'no':
-            upload_keys = raw_input('Does this look good? Type "YES" to upload, "no" to quit: ')
-
-        if upload_keys == 'YES':
-            print 'Uploading fingerprints'
-            for fingerprint in self.fingerprints:
-                self.send_key(fingerprint)
-
-            print '\n\nView the ASCII signed key here: {0}'.format(self.keyserver_url)
-
     def gen_keys_and_sign(self, filename):
         fingerprints_to_sign = []
 
@@ -73,11 +61,6 @@ class TrollWoT_ASCIISign:
         keyid = fingerprint[-8:]
         print 'Receiving key {0} from pool.sks-keyservers.net'.format(keyid)
         subprocess.Popen(['gpg', '--homedir', self.gpg.gnupghome, '--keyserver', 'pool.sks-keyservers.net', '--recv-keys', keyid]).wait()
-
-    def send_key(self, fingerprint):
-        keyid = fingerprint[-8:]
-        print 'Sending key {0} to pool.sks-keyservers.net'.format(keyid)
-        subprocess.Popen(['gpg', '--homedir', self.gpg.gnupghome, '--keyserver', 'pool.sks-keyservers.net', '--send-key', keyid]).wait()
 
 if __name__ == '__main__':
     # arguments
