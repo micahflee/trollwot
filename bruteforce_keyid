@@ -1,4 +1,4 @@
-#!/usr/bin/perl
+#!/usr/bin/perl -T
 
 # This is a modified version of keytrans. I'm using it specifically
 # to brute force specific OpenPGP key IDs.
