@@ -46,10 +46,26 @@ For example, if you want Barack Obama to sign your key, it's easy:
 
     ./fake_sign [NAME] [EMAIL] [KEYID]
 
-Brute force PGP key ID (slow)
------------------------------
+Brute force PGP key ID
+----------------------
 
-brute_force_keyid.py brute forces key IDs by generating an RSA key (using ssh-keygen) and uses the script keytrans to turn it into a PGP key, but changing the timestamp. To run it on your computer, making it a very high priority process:
+bruteforce_keyid.py is a modified version of the keytrans script, that comes with [monkeysphere](http://web.monkeysphere.info/) that adds new functionality to do the brute forcing. Since:
 
-    nice -20 ./bruteforce_keyid [KEYID] [USERID]
+    fingerprint = hash(public_key)
+    public_key = timestamp + public_key_data
+
+Therefore:
+
+    fingerprint = hash(timestamp + public_key_data)
+
+So the script works like this:
+
+* It generates a 4096 bit RSA key
+* It sets the creation timestamp to now
+* It goes in a loop calculating the fingerprint and looking for collisions, decrementing the timestamp until the timestamp is from 3 years ago
+* If it didn't find it, it starts over by generating a new 4096 bit RSA key
+
+On my laptop it compares about 12,000 fingerprints per second. Here's how to use it:
+
+    ./bruteforce_keyid [USERID] [KEYID]
 
