@@ -1144,62 +1144,38 @@ for (basename($0)) {
     my $target_keyid = shift;
     defined($target_keyid) or die "You must specify an 8-character key ID.\n";
 
-    my $gpg_homedir = shift;
-    defined($gpg_homedir) or die "You must specify a GPG homedir.\n";
-        
-    # I'm new to perl and am on an airplane headed to ohm2013 so I don't have internet access 
-    # to look stuff up, so I'm using the filesystem way more than I really need to.
-    my $filename_key = "$gpg_homedir/tmp.bruteforce.gpg";
-    my $filename_status = "$gpg_homedir/tmp.bruteforce.status";
-    my $filename_log = "$gpg_homedir/tmp.bruteforce.log";
-
     # timestamp starts with now
     my $ts_now = time();
     my $ts_three_years_ago = $ts_now - 60*60*24*365*3;
 
     while (1) {
       # generate a new RSA key
-      printf("Generating new RSA key\n");
+      print("Generating new RSA key\n");
       $rsa = Crypt::OpenSSL::RSA->generate_key(4096);
 
       $ts = $ts_now;
       while ($ts >= $ts_three_years_ago) {
-        # make a new OpenPGP key with this timestamp
-        $openpgp_key =
-          make_packet($packet_types->{seckey}, make_rsa_sec_key_body($rsa, $ts)).
-          make_packet($packet_types->{uid}, $uid).
-          makeselfsig( $rsa, $uid, { sig_timestamp => $ts, key_timestamp => $ts });
-
-        open(FILE, ">$filename_key");
-        print FILE $openpgp_key;
-        close(FILE);
-
-        # call out to gnupg to import this key
-        #system("gpg", "--homedir", $gpg_homedir, "--no-tty", "--status-file", $filename_status, "--logger-file", $filename_log, "--import", $filename_key);
-        system("gpg", "--homedir", $gpg_homedir, "--logger-file", $filename_log, "--import", $filename_key);
-
-        # figure out the keyid that was just generated
-        $keyid = '';
-        open(FILE, "<$filename_log");
-        while(<FILE>) {
-          my $line = $_;
-          if (index($line, "secret key imported") != -1) {
-            $keyid = substr($line, 9, 8);
-          }
-        }
+        # get the key id
+        $fingerprint = uc(unpack("H*", fingerprint($rsa, $ts)));
+        $keyid = substr($fingerprint, 32, 8);
 
         if ($target_keyid eq $keyid) {
+          # make a new OpenPGP key with this timestamp
+          $openpgp_key =
+            make_packet($packet_types->{seckey}, make_rsa_sec_key_body($rsa, $ts)).
+            make_packet($packet_types->{uid}, $uid).
+            makeselfsig( $rsa, $uid, { sig_timestamp => $ts, key_timestamp => $ts });
+
           # write $openpgp_key to $keyid.gpg
           open(FILE, ">$keyid.gpg");
           print FILE $openpgp_key;
           close(FILE);
-
-          unlink($filename_key);
-          unlink($filename_status);
           die("\nFound a collision! Saved to $keyid.gpg.\n");
         }
 
         $tries++;
+        print("\r$tries tries");
+
         $ts--;
       }
     }
