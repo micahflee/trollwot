@@ -27,7 +27,7 @@ Build the modified gnupg.
 ASCII sign a PGP key
 --------------------
 
-ascii_sign is a script that takes a filename and a target key id as input. It downloads the target key, then generates a new PGP for each line in the file. It signs the target key with the new keys and pushes everything to the pgp.mit.edu key server. Essentially, it lets you sign any key with ASCII art.
+ascii_sign is a script that takes a filename and a target key id as input. It downloads the target key, then generates a new PGP for each line in the file and signs the target key with the new keys. Essentially, it lets you sign any key with ASCII art.
 
 For example, check out my key: http://pool.sks-keyservers.net:11371/pks/lookup?op=vindex&search=0x5C17616361BD9F92422AC08BB4D25A1E99999697
 
@@ -40,9 +40,7 @@ If you're ASCII signing a key with multiple user IDs, you'll have to press "y" t
 Add fake sigs to a PGP key
 --------------------------
 
-fake_sign.py is a script that takes a name, email address, and target key id as input. It creates a new key with that name and email, and uses it to sign the target key.
-
-For example, if you want Barack Obama to sign your key, it's easy:
+fake_sign.py is a script that takes a name, email address, and target key id as input. It creates a new key with that name and email, and uses it to sign the target key. Usage:
 
     ./fake_sign [NAME] [EMAIL] [KEYID]
 
