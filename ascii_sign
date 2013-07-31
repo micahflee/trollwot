@@ -40,6 +40,11 @@ class TrollWoT_ASCIISign:
     def gen_keys_and_sign(self, filename):
         fingerprints_to_sign = []
 
+        userids = open(filename, 'r').read().strip().split('\n')
+        if len(userids) > 50:
+            print "This ASCII art is more than 50 lines. I think that's a bit much, don't you?"
+            sys.exit();
+
         for userid in open(filename, 'r').read().strip().split('\n'):
             fingerprint = self.gen_key(userid)
             fingerprints_to_sign.append(fingerprint)
