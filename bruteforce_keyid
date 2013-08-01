@@ -1136,7 +1136,9 @@ for (basename($0)) {
     my $fingerprint;
     my $rsa;
     my $ts;
+    my $time_diff;
     my $tries = 0;
+    my $tries_per_sec;
 
     my $uid = shift;
     defined($uid) or die "You must specify a user ID string.\n";
@@ -1170,13 +1172,13 @@ for (basename($0)) {
           open(FILE, ">$keyid.gpg");
           print FILE $openpgp_key;
           close(FILE);
-          die("\nFound a collision! Saved to $keyid.gpg.\n");
+          $time_diff = time() - $ts_now;
+          die("\nFound a collision in $ts_now seconds! Saved to $keyid.gpg.\n");
         }
 
         $tries++;
         if($tries % 100 == 0) {
-          my $time_diff = time() - $ts_now;
-          my $tries_per_sec;
+          $time_diff = time() - $ts_now;
           if($time_diff == 0) {
             $tries_per_sec = 0;
           } else {
