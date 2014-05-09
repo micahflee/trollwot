@@ -1173,7 +1173,7 @@ for (basename($0)) {
           print FILE $openpgp_key;
           close(FILE);
           $time_diff = time() - $ts_now;
-          die("\nFound a collision in $ts_now seconds! Saved to $keyid.gpg.\n");
+          die("\nFound a collision in $time_diff seconds! Saved to $keyid.gpg.\n");
         }
 
         $tries++;
